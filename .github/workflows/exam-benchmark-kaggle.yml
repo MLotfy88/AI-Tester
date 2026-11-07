@@ -71,9 +71,6 @@ jobs:
       PYTHONUNBUFFERED: "1"
       KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-      MODELS: ${{ inputs.models }}
-      QUANT: ${{ inputs.quant_pattern }}
-      CTX: ${{ inputs.ctx_size }}
 
     steps:
       - name: Checkout
@@ -90,18 +87,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # kaggle CLI محتاج six صراحةً في الإصدارات الحالية (كان بيفشل بـ
-          # ModuleNotFoundError: No module named 'six' قبل أي رفع).
+          # kaggle CLI محتاج six صراحةً في الإصدارات الحالية
           pip install "kaggle>=1.6.17" six
 
       - name: Build the Kaggle kernel (no push)
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           python kaggle/build_kernel.py \
-            --models "$MODELS" \
-            --quant "$QUANT" \
-            --ctx "$CTX" \
-            --owner "$KAGGLE_USERNAME" \
-            --kernel-name "exam-${GITHUB_RUN_ID}" \
+            --models "${{ inputs.models }}" \
+            --quant "${{ inputs.quant_pattern }}" \
+            --ctx "${{ inputs.ctx_size }}" \
+            --owner "${{ secrets.KAGGLE_USERNAME }}" \
+            --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
             --policy "${{ inputs.policy }}" \
             --vram-gib "${{ inputs.vram_budget_gib }}" \
@@ -109,13 +108,16 @@ jobs:
             --threads "${{ inputs.threads }}"
 
       - name: Push to Kaggle, wait, and download outputs
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           python kaggle/run_on_kaggle.py \
-            --models "$MODELS" \
-            --quant "$QUANT" \
-            --ctx "$CTX" \
-            --owner "$KAGGLE_USERNAME" \
-            --kernel-name "exam-${GITHUB_RUN_ID}" \
+            --models "${{ inputs.models }}" \
+            --quant "${{ inputs.quant_pattern }}" \
+            --ctx "${{ inputs.ctx_size }}" \
+            --owner "${{ secrets.KAGGLE_USERNAME }}" \
+            --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
             --policy "${{ inputs.policy }}" \
             --vram-gib "${{ inputs.vram_budget_gib }}" \

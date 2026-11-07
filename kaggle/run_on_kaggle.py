@@ -86,7 +86,9 @@ def ensure_credentials(username: str | None, key: str | None, kaggle_json: Path 
         print(f"🔑 التوكن من {json_path} — المستخدم: {user}")
         return str(user)
     raise SystemExit(
-        "❌ مفيش توكن Kaggle. حدّد KAGGLE_USERNAME و KAGGLE_KEY كمتغيرات بيئة "
+        "❌ مفيش توكن Kaggle. في GitHub Actions: أضف Secrets باسم "
+        "KAGGLE_USERNAME و KAGGLE_KEY (من kaggle.com → Settings → API). "
+        "محلياً: export KAGGLE_USERNAME=... && export KAGGLE_KEY=... "
         "(أو حط kaggle.json في ~/.kaggle/)."
     )
 

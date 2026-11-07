@@ -166,7 +166,7 @@ def build(
 
     metadata = {
         "id": f"{owner}/{slug}" if owner else slug,
-        "title": f"Exam Benchmark - {slug}"[:50],
+        "title": slug,
         "code_file": notebook_path.name,
         "language": "python",
         "kernel_type": "notebook",
