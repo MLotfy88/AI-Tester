@@ -67,14 +67,27 @@ def ensure_kaggle_cli() -> None:
 
 
 def ensure_credentials(username: str | None, key: str | None, kaggle_json: Path | None = None) -> str:
-    """يجهّز التوكن للـ CLI ويرجع اسم المستخدم."""
+    """يجهّز التوكن للـ CLI ويرجع اسم المستخدم.
+    يدعم التنسيق الجديد (KAGGLE_API_TOKEN) والقديم (KAGGLE_USERNAME + KAGGLE_KEY).
+    """
+    # التنسيق الجديد: KAGGLE_API_TOKEN الواحد
+    api_token = os.environ.get("KAGGLE_API_TOKEN") or key
+    if api_token:
+        os.environ["KAGGLE_API_TOKEN"] = api_token
+        user = username or os.environ.get("KAGGLE_USERNAME") or "unknown"
+        os.environ["KAGGLE_USERNAME"] = user
+        print(f"🔑 التوكن من متغيرات البيئة (KAGGLE_API_TOKEN) — المستخدم: {user}")
+        return user
+
+    # التنسيق القديم: KAGGLE_USERNAME + KAGGLE_KEY
     user = username or os.environ.get("KAGGLE_USERNAME") or ""
-    token = key or os.environ.get("KAGGLE_KEY") or ""
+    token = os.environ.get("KAGGLE_KEY") or ""
     if user and token:
         os.environ["KAGGLE_USERNAME"] = user
         os.environ["KAGGLE_KEY"] = token
-        print(f"🔑 التوكن من متغيرات البيئة — المستخدم: {user}")
+        print(f"🔑 التوكن من متغيرات البيئة (KAGGLE_USERNAME + KAGGLE_KEY) — المستخدم: {user}")
         return user
+
     json_path = kaggle_json
     if json_path is None:
         json_path = Path.home() / ".kaggle" / "kaggle.json"
@@ -87,8 +100,9 @@ def ensure_credentials(username: str | None, key: str | None, kaggle_json: Path 
         return str(user)
     raise SystemExit(
         "❌ مفيش توكن Kaggle. في GitHub Actions: أضف Secrets باسم "
-        "KAGGLE_USERNAME و KAGGLE_KEY (من kaggle.com → Settings → API). "
-        "محلياً: export KAGGLE_USERNAME=... && export KAGGLE_KEY=... "
+        "KAGGLE_USERNAME و KAGGLE_API_TOKEN (من kaggle.com → Settings → API). "
+        "أو التنسيق القديم: KAGGLE_USERNAME + KAGGLE_KEY. "
+        "محلياً: export KAGGLE_API_TOKEN=... (أو KAGGLE_USERNAME=... && KAGGLE_KEY=...) "
         "(أو حط kaggle.json في ~/.kaggle/)."
     )
 
