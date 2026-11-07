@@ -713,6 +713,49 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(any("Gemini" in n for n in names), "لازم فيه صف للهدف")
             self.assertTrue(any("Qwen3.5-4B-IQ4_XS" in n for n in names), "لازم فيه صف لخط الأساس")
 
+    # ── بند 19: وسم بيئة التشغيل من البيانات نفسها (مش نص ثابت)
+    def test_infer_runner_meta_labels_old_gpu_runs_correctly(self) -> None:
+        """`run_meta` قديم من غير `runner_kind` ⇒ الاستنتاج من النتائج يمنع وسم CPU غلط."""
+        try:
+            from references import infer_runner_meta, runner_label
+        except ImportError:  # pragma: no cover
+            self.skipTest("references غير متاح (مجلد Final Exam Core)")
+
+        # meta صريح ⇒ مايتغيّرش
+        explicit = {"runner_kind": "kaggle_gpu", "runner_gpu": "Tesla T4"}
+        self.assertEqual(infer_runner_meta(explicit, [])["runner_kind"], "kaggle_gpu")
+
+        # meta قديم + نتيجة على GPU (Vulkan0 + gpu_name) ⇒ local_gpu
+        gpu_result = _fake_result("owner/model-A")
+        gpu_result["runtime"]["gpu_name"] = "Quadro M4000M"
+        inferred = infer_runner_meta({"run_id": "old"}, [gpu_result])
+        self.assertEqual(inferred["runner_kind"], "local_gpu")
+        self.assertEqual(inferred["runner_gpu"], "Quadro M4000M")
+        self.assertIn("Quadro M4000M", runner_label(inferred))
+        self.assertNotIn("CPU", runner_label(inferred))
+
+        # من غير gpu_name بس ngl > 0 ⇒ برضه GPU
+        ngl_only = _fake_result("owner/model-B")
+        ngl_only["runtime"]["device"] = ""
+        ngl_only["runtime"]["ngl"] = 12
+        self.assertEqual(infer_runner_meta({}, [ngl_only])["runner_kind"], "local_gpu")
+
+        # مفيش أي دليل على GPU ⇒ CPU
+        cpu_result = _fake_result("owner/model-C")
+        cpu_result["runtime"]["device"] = "CPU"
+        cpu_result["runtime"]["ngl"] = 0
+        self.assertEqual(infer_runner_meta({}, [cpu_result])["runner_kind"], "local_cpu")
+
+        # التقرير نفسه مايقولش «GitHub Actions (CPU)» لتشغيل قديم حصل على GPU
+        if write_report is not None:
+            exam = load_exam()
+            with tempfile.TemporaryDirectory() as td:
+                text = write_report(
+                    [gpu_result], Path(td) / "old.html", exam, {"run_id": "old"}
+                ).read_text(encoding="utf-8")
+            self.assertNotIn("GitHub Actions (CPU)", text)
+            self.assertIn("Quadro M4000M", text)
+
 
 @unittest.skipUnless(
     (ROOT / "scripts" / "run_exam.py").exists(),
@@ -742,37 +785,45 @@ class OrchestratorTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    (ROOT / ".github" / "workflows" / "exam-benchmark.yml").exists(),
+    (ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml").exists(),
     "الـ workflow غير متاح (مجلد Final Exam Core)",
 )
 class WorkflowTests(unittest.TestCase):
+    """عقد لوحة التحكم: GitHub مدخلات فقط، والتنفيذ الفعلي على Kaggle GPU T4×2."""
+
     def test_workflow_contract(self) -> None:
-        path = ROOT / ".github" / "workflows" / "exam-benchmark.yml"
+        path = ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml"
         data = load_yaml(path)
         self.assertIn("workflow_dispatch", data[True] if True in data else data["on"])
         dispatch = (data[True] if True in data else data["on"])["workflow_dispatch"]
         inputs = dispatch["inputs"]
         self.assertLessEqual(len(inputs), 10)
-        self.assertEqual(len(inputs), 10)
-        for name in ("models", "quant_pattern", "ctx_size"):
+        self.assertEqual(len(inputs), 9)
+        for name in ("models", "quant_pattern", "ctx_size", "accelerator"):
             self.assertIn(name, inputs)
         self.assertTrue(inputs["models"]["required"])
         self.assertEqual(str(inputs["ctx_size"]["default"]), "4096")
+        self.assertEqual(inputs["accelerator"]["options"], ["t4x2"])
         self.assertEqual(data["permissions"]["contents"], "read")
-        self.assertIn("exam-results.xlsx", str(data))
+        # التنفيذ على Kaggle مش على GitHub runner
+        self.assertIn("run_on_kaggle.py", str(data))
+        self.assertIn("KAGGLE_USERNAME", str(data))
+        self.assertIn("six", str(data))
 
     def test_workflow_artifact_and_timeouts(self) -> None:
-        path = ROOT / ".github" / "workflows" / "exam-benchmark.yml"
+        path = ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml"
         data = load_yaml(path)
-        job = data["jobs"]["exam"]
-        self.assertEqual(job["timeout-minutes"], 360)
+        job = data["jobs"]["kaggle"]
+        self.assertEqual(job["timeout-minutes"], 355)
         self.assertIn("upload-artifact", str(job))
         self.assertIn("retention-days", str(job))
-        self.assertIn("total-timeout 330", str(job))
+        self.assertIn("build_kernel.py", str(job))
+        self.assertIn("run_on_kaggle.py", str(job))
         self.assertIn("ctx_size", str(job))
         inputs = (data[True] if True in data else data["on"])["workflow_dispatch"]["inputs"]
-        self.assertEqual(inputs["keep_models"]["type"], "boolean")
-        self.assertEqual(inputs["kv_cache_type"]["type"], "choice")
+        self.assertEqual(inputs["policy"]["type"], "choice")
+        self.assertEqual(inputs["accelerator"]["type"], "choice")
+        self.assertNotIn("keep_models", inputs)
 
 
 if __name__ == "__main__":

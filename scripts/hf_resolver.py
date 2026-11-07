@@ -135,16 +135,50 @@ def _split_parts(path: str) -> tuple[str, int, int] | None:
     return m.group(1), int(m.group(2)), int(m.group(3))
 
 
+AUTO_QUANT_PREFERENCE = (
+    ("q4_k_m", 100),
+    ("q4_k_s", 92),
+    ("iq4_xs", 88),
+    ("iq4_nl", 84),
+    ("q5_k_m", 80),
+    ("q5_k_s", 74),
+    ("q4_0", 70),
+    ("q6_k", 58),
+    ("q8_0", 48),
+    ("q3_k_m", 38),
+    ("q3_k_s", 32),
+    ("q2_k", 10),
+    ("f16", 5),
+    ("bf16", 5),
+)
+
+
+def _auto_quant_score(low: str) -> int:
+    """درجة تفضيل quant لما المستخدم يختار `auto`.
+
+    الترتيب: Q4_K_M أولاً (أفضل توازن جودة/حجم ومعظم الموديلات بتوفّره)،
+    وبعده Q4_K_S و IQ4_XS، ثم الأحجام الأكبر/الأصغر. الملفات الغريبة
+    (mmproj/vision) بتتعامل معاها `_quant_score` بعقوبة كبيرة.
+    """
+    for token, score in AUTO_QUANT_PREFERENCE:
+        if token in low:
+            return score
+    return 20
+
+
 def _quant_score(path: str, pattern: str) -> int:
     name = Path(path).name
     low = name.lower()
     pat = pattern.lower().strip()
-    score = 0
-    if pat and pat in low:
-        score += 60
-        # مطابقة حدّية أفضل من مجرد substring
-        if re.search(r"(^|[-_.])" + re.escape(pat) + r"($|[-_.])", low):
-            score += 45
+    if pat == "auto":
+        score = _auto_quant_score(low)
+    else:
+        score = 0
+        if pat and pat in low:
+            score += 60
+            # مطابقة حدّية أفضل من مجرد substring
+            if re.search(r"(^|[-_.])" + re.escape(pat) + r"($|[-_.])", low):
+                score += 45
     if re.search(r"mmproj|projector|vision|image|embed|clip", low):
         score -= 120
     if "imatrix" in low and "imatrix" not in pat:
@@ -155,13 +189,19 @@ def _quant_score(path: str, pattern: str) -> int:
 
 
 def select_quant(files: Iterable[dict], pattern: str) -> list[QuantGroup]:
-    """يبني مجموعات (single/split) للملفات المطابقة ويعيدها مرتبة بالأفضل."""
+    """يبني مجموعات (single/split) للملفات المطابقة ويعيدها مرتبة بالأفضل.
+
+    `pattern="auto"` ⇒ يختار أفضل quant متاح تلقائياً (Q4_K_M أولاً) بدل ما
+    يرفض لو النمط مش موجود. ده اللي بيخلي الأداة تدعم أي موديل GGUF من غير
+    تعديل يدوي.
+    """
     ggufs = [f for f in files if str(f.get("path", "")).lower().endswith(".gguf")]
     if not ggufs:
         raise HFError("مفيش أي ملفات GGUF في الريبو.")
 
     pat = (pattern or "").strip()
-    matched = [f for f in ggufs if not pat or pat.lower() in str(f["path"]).lower()]
+    auto = pat.lower() == "auto"
+    matched = ggufs if auto else [f for f in ggufs if not pat or pat.lower() in str(f["path"]).lower()]
     if not matched:
         available = "\n".join(f"  - {f['path']}" for f in ggufs[:80])
         raise HFError(
@@ -292,6 +332,7 @@ def resolve_and_download(
         "sha": sha,
         "license": license_name or "unknown",
         "quant_pattern": pattern,
+        "quant_chosen": chosen.first_path,
         "files": downloaded,
         "primary_path": first,
         "total_bytes": sum(x["bytes"] for x in downloaded),

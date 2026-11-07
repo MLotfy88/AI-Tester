@@ -40,11 +40,11 @@
 
 - الفكرة شغالة: workflow يدوي (`workflow_dispatch`) بتدخله اسم النموذج في حقل، والسيرفر ينزّل ملف الـ GGUF، ويثبّت llama.cpp، ويشغّل اختبارات، ويرجّعلك ملف Excel.
 - التنزيل بيحصل على سيرفر GitHub مش على جهازك.
-- الاختبار هيتم على CPU فقط. مفيش كارت NVIDIA على الـ runner، ومفيش طريقة تحاكي M4000M وتدّي سرعة حقيقية.
+- الـ runner العام في GitHub **مفيهوش GPU** — عشان كده دوره بقى **لوحة مدخلات فقط**، والتنفيذ الفعلي على Kaggle GPU T4×2.
 - مش ضروري المحاكاة علشان تختار: الجودة بتتنقل بالكامل، والذاكرة بتتحسب بدقة، والسرعة بتتقدّر كسقف نظري ويمكن معايرتها.
 - قاعدة الاختيار المقترحة: فلترة بالـ fit والسرعة، وبعدين ترتيب بالجودة (القسم 11).
 - محاكاة جهازك على 3 طبقات: سعة (رام وVRAM)، ونموذج تحليلي بمواصفاتك، ومعايرة على جهازك. السرعة الدقيقة مش ممكنة من غير المعايرة (القسم 12).
-- Kaggle بيدّيك GPU فعلي (P100 أو T4) لقياس الـ fit والسرعة، وGitHub بيدّيك غربلة الجودة بالمجان. الأفضل تستخدمهم مع بعض (القسم 13).
+- Kaggle بيدّيك GPU فعلي (**T4×2**؛ P100 اتشال) لقياس الـ fit والسرعة، وGitHub بيدّيك لوحة الإدخال والتنزيل. الأفضل تستخدمهم مع بعض (القسم 13).
 - Kaggle Benchmarks بيختبر **جودة** نماذج مستضافة بس. مفيش فيه سرعة أو تشغيل على جهازك، وليه استخدام مرجعي (القسم 14).
 
 ---
@@ -472,7 +472,7 @@ flowchart TD
 
 ### 12.1 الممكن وغير الممكن
 
-مفيش طريقة تخلّي كارت تاني (T4 أو P100) أو معالج تاني يتصرف زي Quadro M4000M وi7-6920HQ من ناحية السرعة. اللي ممكن هو ثلاث طبقات بتتجمع مع بعض:
+مفيش طريقة تخلّي كارت تاني (زي T4) أو معالج تاني يتصرف زي Quadro M4000M وi7-6920HQ من ناحية السرعة. اللي ممكن هو ثلاث طبقات بتتجمع مع بعض:
 
 | الطبقة (Layer) | بتحاكي إيه | النتيجة | الدقة المتوقعة | بتتنفذ فين |
 |---|---|---|---|---|
@@ -555,12 +555,14 @@ tg_tps = 1 ÷ t_tg      pp_tps = 1 ÷ t_pp      وقت أول token ≈ عدد t
 | الكارت | المعمارية | Compute Capability | VRAM | سرعة الذاكرة | ملاحظات |
 |---|---|---|---|---|---|
 | Quadro M4000M (هدفك) | Maxwell | 5.2 | 4 GB | 160 GB/s | بدون Tensor Cores |
-| Tesla P100 (على Kaggle) | Pascal | 6.0 | 16 GB | حوالي 732 GB/s (معرفتي، لم يُتحقق) | بدون Tensor Cores، أقرب جيل لـ Maxwell |
 | Tesla T4 (على Kaggle، اتنين) | Turing | 7.5 | 16 GB لكل كارت | حوالي 320 GB/s (معرفتي، لم يُتحقق) | فيه Tensor Cores، والكارتين مش بيجمعوا ذاكرتهم |
 
-- حسب معرفتي (لم أتحقق منها): llama.cpp بيستخدم مسار dp4a للضرب المكمّم من compute capability 6.1، فالـ P100 (6.0) وMaxwell (5.2) بيستخدموا مسار مشترك أبطأ، والـ T4 بيستخدم مسار تاني. لو ده صح، الـ P100 أقرب في سلوك الـ kernels.
-- تقدير خشن لسرعة التوليد: `tg على M4000M ≈ tg المقاسة على الكارت البديل × (160 ÷ سرعة ذاكرة البديل)`، يعني حوالي 0.22 للـ P100 وحوالي 0.5 للـ T4. ده مجرد مؤشر ومش بديل عن المعايرة.
-- على Kaggle بتختار الكارت من إعدادات الـ Accelerator: P100 أو T4 x2. واستخدم كارت واحد بس (`CUDA_VISIBLE_DEVICES=0`).
+- **P100 اتشال من Kaggle** — المتاح فعلياً هو **T4×2**، والأداة بتستخدم كارت واحد بس
+  (`CUDA_VISIBLE_DEVICES=0`) لأن الذاكرة مش بتتجمع.
+- T4 بيستخدم مسار kernels مختلف عن Maxwell (Tensor Cores + dp4a)، فالسرعة الخام مختلفة؛
+  عشان كده الأرقام المقيسة على T4 **مش** بتتقدم كأنها سرعة جهازك.
+- تقدير خشن لسرعة التوليد: `tg على M4000M ≈ tg المقاسة على T4 × (160 ÷ 320)` ≈ **0.5×**.
+  ده مجرد مؤشر ومش بديل عن المعايرة.
 
 ### 12.6 الدقة المتوقعة (Expected accuracy)
 
@@ -585,7 +587,7 @@ tg_tps = 1 ÷ t_tg      pp_tps = 1 ÷ t_pp      وقت أول token ≈ عدد t
 | الجانب | GitHub Actions | Kaggle Notebook |
 |---|---|---|
 | طريقة التشغيل | زرار Run workflow وحقول إدخال | تعدّل Cell المعاملات وتشغّل (Save Version ثم Save & Run All)، أو دفع تلقائي بالـ CLI |
-| العتاد | CPU فقط: 4 vCPU و16 GB RAM (repo عام) | GPU: P100 أو 2×T4 (16 GB لكل كارت)، مع 4 CPU cores وحوالي 29 GB RAM |
+| العتاد | CPU فقط: 4 vCPU و16 GB RAM (repo عام) — **بيستخدم كواجهة مدخلات فقط** | GPU: 2×T4 (16 GB لكل كارت، وكارت واحد فعلياً)، مع 4 CPU cores وحوالي 29 GB RAM |
 | الحصة | مجاني وبدون حد دقائق (repo عام) | حوالي 30 ساعة GPU أسبوعيًا، وبتتغير حسب الطلب |
 | أقصى وقت | 6 ساعات للـ job (معرفتي) | 12 ساعة للجلسة |
 | الإنترنت | متاح دايمًا | لازم تفعّله من إعدادات الـ notebook علشان تنزّل llama.cpp والنموذج |
@@ -593,7 +595,7 @@ tg_tps = 1 ÷ t_tg      pp_tps = 1 ÷ t_pp      وقت أول token ≈ عدد t
 | المخرجات | artifact (ملف Excel) | ملفات في `/kaggle/working` بتنزّلها من تبويب Output |
 | الخصوصية | repo عام بيظهر للكل | notebook خاص (private) بسهولة |
 | حقول الإدخال | واجهة حقول جاهزة | مفيش واجهة معاملات جاهزة حسب علمي، فبتعدّل Cell أو بتحقن القيم بسكربت |
-| الأنسب لـ | غربلة الجودة على نماذج كتير بالتوازي بدون استهلاك حصة | قياس الـ fit والسرعة على GPU فعلي وتجربة نماذج أكبر |
+| الأنسب لـ | لوحة تحكم سريعة (مدخلات + رفع + انتظار + تنزيل) بدون استهلاك حصة | **التنفيذ الفعلي**: قياس الـ fit والسرعة على GPU حقيقي وتجربة نماذج أكبر |
 
 ### 13.2 شكل الفكرة على Kaggle خطوة بخطوة
 
@@ -608,12 +610,12 @@ flowchart TD
     T --> O["Output: ملف Excel"]
 ```
 
-1. أنشئ notebook جديد، وفي Settings اختار Accelerator = GPU (P100 أو T4 x2) وفعّل Internet.
-2. **Cell 1:** المعاملات (أسماء النماذج، الـ quant، `ctx_size`، ميزانية VRAM المحاكاة 3.4، حد الرام 15.9، الـ threads).
-3. **Cell 2:** يفحص الكارت ويضبط `CUDA_VISIBLE_DEVICES=0`، ويفشل لو الكارت مش P100 أو T4.
+1. أنشئ notebook جديد، وفي Settings اختار Accelerator = **GPU T4 x2** وفعّل Internet.
+2. **Cell 1:** المعاملات (أسماء النماذج، الـ quant أو `auto`، `ctx_size`، ميزانية VRAM المحاكاة 3.4، حد الرام 15.9، الـ threads).
+3. **Cell 2:** يفحص الكارت ويضبط `CUDA_VISIBLE_DEVICES=0`، ويفشل لو الكارت مش T4.
 4. **Cell 3:** يحجز رام بحجم الفرق علشان المتاح يبقى 15.9 GiB.
 5. **Cell 4:** يحجز VRAM على الكارت علشان الفاضي يبقى حوالي 3.4 GiB.
-6. **Cell 5 و6:** يبني llama.cpp بـ CUDA (arch 60 للـ P100 أو 75 للـ T4)، وينزّل ملف الـ GGUF.
+6. **Cell 5 و6:** يبني llama.cpp بـ CUDA (arch 75 للـ T4)، وينزّل ملف الـ GGUF.
 7. **Cell 7:** يشغّل `llama-fit-params` لتوزيع الـ layers، وبعدها `llama-bench`.
 8. **Cell 8:** يشغّل اختبارات الجودة ويكتب Excel في `/kaggle/working`.
 9. شغّل بـ Save Version ثم Save & Run All، ونزّل النتائج من تبويب Output.
@@ -631,9 +633,13 @@ flowchart TD
 
 **التوكن:** `KAGGLE_USERNAME` و`KAGGLE_KEY` كـ Secrets في GitHub. وفيه Action جاهز من المجتمع (`joel-hanson/kaggle-kernel-actions`) بيعمل خطوة الـ push.
 
+**التثبيت:** `pip install "kaggle>=1.6.17" six` — من غير `six` الـ CLI بيفشل
+بـ `ModuleNotFoundError` قبل الرفع.
+
 **تحذيرات من تقارير مستخدمين (لم أتحقق منها):**
 
-- اختيار نوع الكارت بالـ CLI (`--accelerator`) ممكن يرجع للافتراضي لو الاسم غلط، فخلّي Cell 2 يفشل لو الكارت مش المتوقع.
+- الـ workflow الوحيد دلوقتي هو `exam-benchmark-kaggle.yml`؛ مسار CPU على GitHub اتشال لأنه مش بيقيس نفس الحاجة.
+- اختيار نوع الكارت بالـ CLI (`--accelerator`) ممكن يرجع للافتراضي لو الاسم غلط، فخلّي Cell 2 يفشل لو الكارت مش **T4**.
 - Kaggle Secrets بتتشال لما تعمل push بالـ CLI. لو محتاج `HF_TOKEN` مرره بـ private dataset أو استخدم نماذج عامة.
 - لازم تتأكد من اسم الـ accelerator الصحيح بـ `kaggle kernels push --help` للنسخة اللي معاك.
 
@@ -647,16 +653,18 @@ flowchart LR
 
 | المرحلة | المنصة | الغرض | المخرج |
 |---|---|---|---|
-| 1 | GitHub (CPU) | تقييم الجودة لعدد كبير من النماذج بالتوازي، بدون استهلاك حصة GPU | درجات الجودة وفحص fit تحليلي |
-| 2 | Kaggle (GPU مع ballast) | قياس السعة (الـ layers، رام، VRAM) وسرعة على كارت بديل لأفضل 3 إلى 5 | `ngl` الفعلي وسرعة تقريبية |
-| 3 | جهازك | معايرة وتأكيد أفضل 2 | معاملات η وسرعة حقيقية وقرار نهائي |
+| 1 | GitHub (واجهة مدخلات) | تحديد النماذج والإعدادات ورفع الـ kernel ومتابعة التشغيل | artifact بالمخرجات |
+| 2 | Kaggle T4×2 (مع ballast) | **التنفيذ الفعلي**: قياس السعة (الـ layers، رام، VRAM) والسرعة على GPU | `ngl` الفعلي وسرعة T4 المقيسة |
+| 3 | جهازك | معايرة وتأكيد أفضل 2 | معاملات η وسرعة M4000M الحقيقية والقرار النهائي |
 
 ### 13.5 حدود Kaggle
 
 - حصة الـ GPU الأسبوعية مش رقم ثابت في الوثائق (المصادر بتقول حوالي 30 ساعة)، واتبعت الرقم الظاهر في حسابك.
 - الجلسة 12 ساعة، وحوالي 20 GB للملفات الناتجة.
-- بناء llama.cpp بـ CUDA بياخد وقت في كل session جديدة. حدد arch واحد (60 أو 75) علشان تقلله، أو احفظ الـ binaries كـ dataset.
+- بناء llama.cpp بـ CUDA بياخد وقت في كل session جديدة. الـ arch الوحيد المستخدم دلوقتي هو **75** (T4)، أو احفظ الـ binaries كـ dataset.
 - بتاخد كارت واحد بس من الـ T4 x2، والذاكرة مش بتتجمع.
+- **السرعة المقيسة على T4 أسرع من M4000M** — التقرير بيقول ده صراحةً، والتقدير الخاص بجهازك
+  في قسم الملاءمة. الـ ballast بيحاكي **السعة** فقط.
 - مفيش صلاحيات root، فمفيش ضبط لترددات الكارت.
 
 ---
@@ -741,7 +749,7 @@ def egyptian_task(llm, prompt: str, must_include: list):
 | كروت Maxwell وCUDA 13 | فشل التشغيل المحلي | CUDA 12.x أو Vulkan |
 | تغيير حدود GitHub (مواصفات أو أسعار) | افتراضات قديمة | مراجعة الوثائق دوريًا (القسم 16) |
 | رام بقناة واحدة بدل قناتين | السرعة على المعالج تقريبًا النص | تحقق من الشرائح (12.4 خطوة 1) وعدّل الملف |
-| الـ CLI يرجع لكارت افتراضي على Kaggle | قياسات على كارت غلط | Cell 2 يفشل لو الكارت مش P100 أو T4 |
+| الـ CLI يرجع لكارت افتراضي على Kaggle | قياسات على كارت غلط | Cell 2 يفشل لو الكارت مش T4 |
 | نفاد حصة Kaggle (GPU أو AI) | توقف الاختبار | غربلة على GitHub أولًا، وتقليل عدد النماذج على Kaggle |
 | مقارنة نماذج مستضافة كبيرة بنماذج محلية صغيرة | استنتاج مضلل | Benchmarks كمرجع بس (القسم 14.3) |
 | أرقام السرعة بدون معايرة | تفاؤل زائد | الـ report يكتب "غير معاير" (القسم 12.3) |
@@ -794,14 +802,14 @@ def egyptian_task(llm, prompt: str, must_include: list):
 | أرقام الأمثلة في القسم 9 والملحق B | حسابات اتشغلت فعليًا | تم (اختبار آلي) |
 | مواصفات i7-6920HQ (4 نوى، 8 threads، حتى 3.8 GHz، AVX2، قناتان DDR4-2133، 34.1 GB/s) | [eatyourbytes](https://www.eatyourbytes.com/cpu-detail/intel-i7-6920hq/) و[cpu-monkey](https://cpu-monkey.com/en/cpu-intel_core_i7_6920hq) و[technical.city](https://technical.city/en/cpu/Core-i7-6920HQ) | تم، مصادر متوافقة تنقل بيانات Intel ARK |
 | قدرة حساب المعالج 435.2 GFLOPS | حساب نظري: 4 × 3.4 × 32 | حساب مش قياس |
-| Kaggle: P100 أو 2×T4، جلسة 12 ساعة، حوالي 30 ساعة GPU أسبوعيًا (متغيرة)، 4 نوى وحوالي 29 GB رام في جلسة GPU | [fastero](https://fastero.com/blog/kaggle-notebooks) و[agentdeals](https://agentdeals.dev/vendor/kaggle) و[aimultiple](https://aimultiple.com/free-cloud-gpu) | مصادر ثانوية بتنقل عن توثيق Kaggle (أكتوبر 2026). بعضها يذكر 9 ساعات |
+| Kaggle: 2×T4 (كارت واحد فعلياً)، جلسة 12 ساعة، حوالي 30 ساعة GPU أسبوعيًا (متغيرة)، 4 نوى وحوالي 29 GB رام في جلسة GPU | [fastero](https://fastero.com/blog/kaggle-notebooks) و[agentdeals](https://agentdeals.dev/vendor/kaggle) و[aimultiple](https://aimultiple.com/free-cloud-gpu) | مصادر ثانوية بتنقل عن توثيق Kaggle (أكتوبر 2026). بعضها يذكر 9 ساعات |
 | Kaggle Benchmarks: النوعان، المكتبة، النماذج المدعومة، المجانية ضمن حصة | [وثائق Kaggle](https://www.kaggle.com/docs/benchmarks) و[إعلان Community Benchmarks](https://www.kaggle.com/product-announcements/667898) و[برنامج المنح](https://www.kaggle.com/blog/introducing-the-benchmarks-resource-grant-program) و[PyPI](https://pypi.org/project/kaggle-benchmarks/) | تم |
 | حصة الـ AI اليومية 10$ والشهرية 100$ | [Issue عام #76](https://github.com/Kaggle/kaggle-benchmarks/issues/76) | غير رسمي وقد يتغير |
 | أمر `kaggle benchmarks` و`kaggle benchmarks auth` | [نقاش PR في kaggle-cli](https://github.com/Kaggle/kaggle-cli/pull/1012) | غير مؤكد |
 | حقول `kernel-metadata.json` (`enable_gpu` و`enable_internet`) وأمر `kaggle kernels push` | [Kaggle CLI wiki](https://github.com/Kaggle/kaggle-cli/wiki/Kernel-Metadata/1e063e01133f4362b6fb90f60d2d95b1e3869313) | تم. علم `--accelerator` وتحذير الرجوع للافتراضي وإزالة Secrets من تقارير مستخدمين، لم أتحقق منها |
 | `--fit` و`--fit-target` في llama.cpp | [نقاش #18049](https://gh.r-mj.com/ggml-org/llama.cpp/discussions/18049) (مرآة) | تم |
 | أداة `llama-fit-params` | README الأداة (نسخ منشورة) | تم |
-| سرعة P100 (حوالي 732 GB/s) وT4 (حوالي 320 GB/s)، ومسار dp4a في cc 6.1 وما فوق | معرفتي العامة | لم يُتحقق منه |
+| سرعة T4 (حوالي 320 GB/s)، ومسار dp4a في cc 6.1 وما فوق | معرفتي العامة | لم يُتحقق منه |
 | طريقة الـ ballast (حجز رام وVRAM) ومعيار الفرق أقل من 20% | تصميم مقترح مني | غير مجرَّب |
 
 ---
@@ -1221,7 +1229,7 @@ if __name__ == "__main__":
 | η (eta) | معامل معايرة = السرعة المقاسة ÷ السقف النظري (1.0 يعني السقف) |
 | tg / pp | سرعة توليد الـ tokens (tg) وسرعة معالجة الـ prompt (pp) |
 | Roofline | نموذج بيحدد السرعة القصوى من سرعة الذاكرة أو قدرة الحساب |
-| Proxy GPU | كارت بديل متاح (P100 أو T4) بنستخدمه لقياس بدل كارتك |
+| Proxy GPU | كارت بديل متاح (T4×2) بنستخدمه لقياس بدل كارتك |
 | Model proxy | بروكسي Kaggle اللي بيوصّل المهام للنماذج المستضافة |
 | Device profile | ملف بمواصفات جهازك بيتشارك بين GitHub وKaggle والمعايرة |
 
@@ -1281,7 +1289,7 @@ calibration:                   # تتملأ بعد المعايرة (القسم 
 
 ```python
 # kaggle_eval.py: هيكل notebook على Kaggle (اكتب كل جزء بين علامات "# %%" في cell منفصلة).
-# الإعدادات المطلوبة في Kaggle: Accelerator = GPU (P100 أو T4 x2)، و Internet = ON.
+# الإعدادات المطلوبة في Kaggle: Accelerator = GPU T4 x2، و Internet = ON.
 # لم يُختبر على Kaggle: راجع الأوامر قبل الاعتماد عليه.
 
 # %% Cell 1: المعاملات (Parameters): عدّلها قبل Save & Run All
@@ -1310,7 +1318,7 @@ def sh(cmd):
 print(sh("nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv").stdout)
 print(sh("nproc; free -g | head -2").stdout)
 GPU_NAME = sh("nvidia-smi --query-gpu=name --format=csv,noheader").stdout.strip().splitlines()[0]
-assert any(k in GPU_NAME for k in ("P100", "T4")), f"GPU غير متوقع: {GPU_NAME}"
+assert "T4" in GPU_NAME, f"GPU غير متوقع: {GPU_NAME}"
 
 # %% Cell 3: محاكاة سعة الرام (RAM ballast): يقلل الرام المتاحة لحوالي 15.9 GiB
 import numpy as np
@@ -1333,7 +1341,7 @@ print(f"VRAM الفاضي بعد الحجز: {torch.cuda.mem_get_info(0)[0] / 2*
 # تحقق بـ nvidia-smi: الفاضي لازم يقارب الميزانية، وعدّل target_free_vram_gib لو فيه فرق (سياق CUDA ليه حجز صغير)
 
 # %% Cell 5: بناء llama.cpp بـ CUDA (يتعمل مرة واحدة في الـ session)
-ARCH = "75" if "T4" in GPU_NAME else "60"           # T4 = Turing 7.5، P100 = Pascal 6.0
+ARCH = "75"                                          # T4 = Turing 7.5
 BIN = "/kaggle/working/llama.cpp/build/bin"
 tag = PARAMS["llama_cpp_tag"]
 branch = f"--branch {tag} " if tag else ""

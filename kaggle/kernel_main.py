@@ -3,7 +3,7 @@
 #
 # ده الـ notebook اللي بيتولّد تلقائياً من `kaggle/build_kernel.py` ومش بيتعدّل بالإيد.
 # بيعمل الآتي:
-# 1. يتأكد إن الكارت P100 أو T4 (وإلا يوقف فوراً — نتايج على كارت تاني مضللة).
+# 1. يتأكد إن الكارت T4 (وإلا يوقف فوراً — نتايج على كارت تاني مضللة).
 # 2. يحجز **ballast** رام وVRAM علشان يبقي المتاح زي جهازك المستهدف بالظبط.
 # 3. يبني llama.cpp بـ CUDA (أو ينزّل release جاهز).
 # 4. ينزّل موديلات GGUF من Hugging Face (نماذج **عامة فقط** — Kaggle Secrets بتتشال مع CLI push).
@@ -76,9 +76,7 @@ if not gpu_name:
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 cuda_arch = ""
-if "p100" in gpu_name.lower() or gpu_cap.startswith("6."):
-    cuda_arch = "60"
-elif "t4" in gpu_name.lower() or gpu_cap.startswith("7."):
+if "t4" in gpu_name.lower() or gpu_cap.startswith("7."):
     cuda_arch = "75"
 print(f"✅ GPU: {gpu_name} · compute {gpu_cap} · CUDA arch={cuda_arch or 'auto'}")
 
@@ -89,6 +87,10 @@ print(f"✅ GPU: {gpu_name} · compute {gpu_cap} · CUDA arch={cuda_arch or 'aut
 import numpy as np  # noqa: E402
 
 target_ram_gib = float(PARAMS.get("ram_gib") or 15.9)
+# threads الفعلية على Kaggle (مش target) — تشغيل 8 threads على 4 vCPU بيعمل
+# oversubscription ويبطّأ القياس. بنسجّل الفعلي في التقرير.
+actual_threads = max(1, min(int(PARAMS.get("threads") or 8), os.cpu_count() or 8))
+print(f"threads: target={PARAMS.get('threads')} · actual={actual_threads} (cpu_count={os.cpu_count()})")
 meminfo = {}
 with open("/proc/meminfo", encoding="utf-8") as fh:
     for line in fh:
@@ -169,6 +171,36 @@ print("✅ llama-server:", server_bin)
 # ## Cell: تشغيل الامتحان (21 سؤال — نفس ورقة الامتحان ونفس الإعدادات)
 
 # %%
+# ── ملف جهاز محاكاة: نفس مواصفات جهازك (Quadro M4000M / 15.9 GiB RAM)
+#    مع ميزانيات الـ VRAM/RAM اللي اتحجزت فوق. الحسابات النظرية (fit) بتتم
+#    على مواصفات جهازك، والقياس الفعلي على T4.
+import yaml  # noqa: E402
+
+profile_src = EXAM / "config" / "device_profile.yaml"
+profile = yaml.safe_load(profile_src.read_text(encoding="utf-8")) or {}
+budgets = profile.setdefault("budgets", {})
+budgets["vram_budget_gib"] = target_vram_gib
+budgets.setdefault("compute_buffer_gib", 0.3)
+ram_cfg = profile.setdefault("ram", {})
+ram_cfg["usable_gib"] = target_ram_gib
+profile["name"] = "kaggle-t4-simulation"
+profile["simulation"] = {
+    "actual_gpu": gpu_name,
+    "actual_gpu_memory_gib": round(total_b / 1024**3, 2),
+    "actual_cpu_threads": actual_threads,
+    "target_vram_budget_gib": target_vram_gib,
+    "target_ram_gib": target_ram_gib,
+    "note": "VRAM/RAM متقيدين بميزانية جهازك؛ الكارت نفسه T4 (أسرع من M4000M).",
+}
+profile_path = WORK / "device_profile.yaml"
+profile_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False), encoding="utf-8")
+print(f"✅ device_profile: {profile_path}")
+
+runner_label = (
+    f"Kaggle GPU T4×2 — {gpu_name} · محاكاة VRAM {target_vram_gib} GiB / "
+    f"RAM {target_ram_gib} GiB · threads {actual_threads}"
+)
+
 exam_cmd = [
     sys.executable,
     str(EXAM / "scripts" / "run_exam.py"),
@@ -181,9 +213,17 @@ exam_cmd = [
     "--kv",
     str(PARAMS.get("kv") or "f16"),
     "--threads",
-    str(PARAMS.get("threads") or 8),
+    str(actual_threads),
     "--device",
     "CUDA0",
+    "--runner-kind",
+    "kaggle_gpu",
+    "--runner-label",
+    runner_label,
+    "--runner-gpu",
+    gpu_name,
+    "--device-profile",
+    str(profile_path),
     "--server",
     str(server_bin),
     "--out",
@@ -221,7 +261,10 @@ shutil.copytree(OUT, dest, dirs_exist_ok=True)
 (dest / "kaggle-gpu.txt").write_text(
     f"gpu={gpu_name}\ncompute_cap={gpu_cap}\ncuda_arch={cuda_arch}\n"
     f"vram_target_gib={target_vram_gib}\nram_target_gib={target_ram_gib}\n"
+    f"actual_cpu_threads={actual_threads}\n"
     f"vram_free_after_ballast_gib={free_b / 1024**3:.2f}\n"
+    f"runner_label={runner_label}\n"
+    f"device_profile={profile_path}\n"
     f"exit_code={proc.returncode}\nseconds={(time.time() - started):.0f}\n",
     encoding="utf-8",
 )

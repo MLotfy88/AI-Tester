@@ -109,12 +109,21 @@ def match_entry(model_key: str, overrides: dict) -> tuple[dict, str, str]:
 
 
 def family_of(model_key: str) -> str:
-    """اسم عائلة الموديل (qwen35 / qwen3 / llama / gemma / phi ...)."""
+    """اسم عائلة الموديل (qwen35 / qwen3 / llama / gemma / phi ...).
+
+    `qwen3.8` (بنقطة) و`qwen38` أسماء إصدارات **جديدة من عائلة Qwen3.5**
+    (نفس ChatML / gated-deltanet) ⇒ بتترجم لـ`qwen35` عشان تاخد نفس
+    قالب الامتحان وقواعد العائلة، من غير أي تعديل يدوي لكل موديل.
+    """
     key = _slug_key(model_key)
-    if "qwen3.5" in key or "qwen35" in key:
+    if "qwen3.5" in key or "qwen35" in key or "qwen3.8" in key or "qwen38" in key:
         return "qwen35"
     if "qwen3" in key:
         return "qwen3"
+    if "deepseek" in key:
+        return "deepseek"
+    if "glm" in key or "chatglm" in key:
+        return "glm"
     if "gemma-3" in key or "gemma3" in key:
         return "gemma3"
     if "gemma" in key:
@@ -164,6 +173,16 @@ def sampling_from_generation_config(data: dict | None) -> dict:
     return out
 
 
+def _write_model_template(
+    model_key: str, embedded: str, write_template_dir: str | Path | None
+) -> str:
+    """يكتب القالب المدمج في ملف .jinja داخل مجلد التشغيل ويرجع مساره."""
+    target = Path(write_template_dir or ".") / f"{_safe_name(model_key)}.jinja"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(embedded, encoding="utf-8")
+    return str(target)
+
+
 def resolve(
     model_key: str,
     *,
@@ -207,19 +226,27 @@ def resolve(
         ms.sampling_source = "none"
 
     # ── قالب المحادثة
+    #   override صريح > وضع model > auto (عائلات Qwen ⇒ قالب الامتحان،
+    #   وأي عائلة تانية ⇒ القالب المدمج في الـ GGUF مع تحذير) > قالب الامتحان.
     template = str(entry.get("chat_template") or defaults.get("chat_template") or "")
+    family = family_of(model_key)
     embedded = ""
-    if template_mode == "model" or not template:
+    if template_mode in ("model", "auto"):
         embedded = extract_embedded_template(gguf_path)
     if template:
         ms.chat_template = template
         ms.template_source = "override"
     elif template_mode == "model" and embedded:
-        target = Path(write_template_dir or ".") / f"{_safe_name(model_key)}.jinja"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(embedded, encoding="utf-8")
-        ms.chat_template = str(target)
+        ms.chat_template = _write_model_template(model_key, embedded, write_template_dir)
         ms.template_source = "model"
+    elif template_mode == "auto" and embedded and not family.startswith("qwen"):
+        ms.chat_template = _write_model_template(model_key, embedded, write_template_dir)
+        ms.template_source = "model"
+        ms.warnings.append(
+            f"الموديل من عائلة «{family or 'غير معروفة'}» — الوضع auto استخدم "
+            "قالب المحادثة المدمج في الـ GGUF (مش قالب الامتحان) لأنه الأنسب للعائلة. "
+            "لو عايز مقارنة موحدة مع موديلات Qwen استخدم --template-mode exam."
+        )
     else:
         ms.chat_template = exam_template
         ms.template_source = "exam"
@@ -227,6 +254,11 @@ def resolve(
             ms.warnings.append(
                 "وضع القالب 'model': الموديل مفيهوش قالب محادثة مدمج، "
                 "فاستُخدم قالب الامتحان."
+            )
+        elif template_mode == "auto" and not embedded and not family.startswith("qwen"):
+            ms.warnings.append(
+                f"الموديل من عائلة «{family or 'غير معروفة'}» ومفيهوش قالب محادثة مدمج — "
+                "استُخدم قالب الامتحان. راجع الردود لو ظهرت رموز خام."
             )
 
     exam_template_path = repo_path(exam_template)

@@ -190,6 +190,113 @@ def target_gap(exam: dict | None, target: dict | None, axes_cfg: dict | None) ->
     }
 
 
+# --------------------------------------------------------------------------- بيئة التشغيل
+RUNNER_LABELS = {
+    "kaggle_gpu": "Kaggle GPU",
+    "github_cpu": "GitHub Actions (CPU)",
+    "local_gpu": "جهازك (GPU)",
+    "local_cpu": "جهازك (CPU)",
+    "custom": "بيئة تشغيل مخصّصة",
+}
+
+
+def runner_kind(run_meta: dict | None) -> str:
+    """نوع بيئة التشغيل — مفتاح ثابت يتحوّل لوسم مقروء."""
+    return str((run_meta or {}).get("runner_kind") or "local")
+
+
+def infer_runner_meta(run_meta: dict | None, results: list[dict] | None = None) -> dict:
+    """يستنتج بيئة التشغيل من النتائج لو الـ`run_meta` القديم مفيهوش `runner_kind`.
+
+    السبب: تشغيلات قديمة اتعملت على GPU بس التقرير كان بيقول «CPU» لأن الوسم
+    الثابت مكانش موجود. الاستنتاج من `device` / `gpu_name` / `ngl` بيمنع الوسم الغلط
+    لما نعيد توليد تقرير قديم من الـ payload.
+    """
+    meta = dict(run_meta or {})
+    if str(meta.get("runner_kind") or "").strip():
+        return meta
+
+    device = str(meta.get("device") or "").lower()
+    gpu = str(meta.get("runner_gpu") or "").strip()
+    gpu_runtime = False
+    for result in results or []:
+        rt = result.get("runtime") or {}
+        if not gpu:
+            gpu = str(rt.get("gpu_name") or "").strip()
+        if gpu or str(rt.get("gpu_name") or "").strip():
+            gpu_runtime = True
+        try:
+            if int(rt.get("ngl") or 0) > 0:
+                gpu_runtime = True
+        except (TypeError, ValueError):
+            pass
+
+    if gpu:
+        meta["runner_gpu"] = gpu
+    gpu_device = any(k in device for k in ("cuda", "vulkan", "metal", "rocm"))
+    meta["runner_kind"] = "local_gpu" if (gpu_runtime or gpu_device or gpu) else "local_cpu"
+    return meta
+
+
+def runner_label(run_meta: dict | None) -> str:
+    """وسم عربي واضح لبيئة التشغيل، مع اسم الكارت لو معروف.
+
+    **القاعدة:** التقرير ممنوع يقول «GitHub runner (CPU)» أو «نظري» لما التشغيل
+    كان على GPU. الوسم بيتحدد من `run_meta` اللي بيجي من الـ CLI.
+    """
+    meta = run_meta or {}
+    explicit = str(meta.get("runner_label") or "").strip()
+    if explicit:
+        return explicit
+    kind = runner_kind(meta)
+    base = RUNNER_LABELS.get(kind, RUNNER_LABELS["custom"])
+    gpu = str(meta.get("runner_gpu") or "").strip()
+    if gpu and gpu.lower() not in base.lower():
+        return f"{base} — {gpu}"
+    return base
+
+
+def measured_on_gpu(run_meta: dict | None) -> bool:
+    """هل الأرقام المقيسة اتأخذت على GPU فعلي؟"""
+    meta = run_meta or {}
+    if str(meta.get("runner_gpu") or "").strip():
+        return True
+    return runner_kind(meta) in ("kaggle_gpu", "local_gpu")
+
+
+def baseline_platform_warning(exam_cfg: dict | None, run_meta: dict | None) -> str:
+    """تحذير لو خط الأساس المنشور اتقاس على جهاز مختلف عن بيئة التشغيل الحالية.
+
+    المقارنة **بين الموديلات** تفضل سليمة (كلهم نفس البيئة)، لكن «الفرق عن خط
+    الأساس» مش فرق جهاز واحد ⇒ لازم يظهر تحذير صريح في HTML وExcel وsummary.
+    """
+    baseline = baseline_config(exam_cfg)
+    if not baseline:
+        return ""
+    measured_kind = str(baseline.get("measured_kind") or "").strip()
+    if not measured_kind:
+        return ""
+    kind = runner_kind(run_meta)
+    measured_gpu = str(baseline.get("measured_gpu") or "").strip().lower()
+    current_gpu = str((run_meta or {}).get("runner_gpu") or "").strip().lower()
+    same_kind = measured_kind == kind
+    same_gpu = (
+        not measured_gpu
+        or not current_gpu
+        or measured_gpu in current_gpu
+        or current_gpu in measured_gpu
+    )
+    if same_kind and same_gpu:
+        return ""
+    measured_on = str(baseline.get("measured_on") or measured_gpu or measured_kind)
+    return (
+        f"المرجع الإضافي {baseline.get('total')}/100 اتقاس على **{measured_on}**، "
+        f"والتشغيل الحالي على **{runner_label(run_meta)}**. "
+        "المقارنة بين الموديلات سليمة (كلهم نفس البيئة)، لكن «الفرق عن المرجع الإضافي» "
+        "مش فرق جهاز واحد — خُده كمؤشر مش كحكم."
+    )
+
+
 def target_ranking(results: list[dict], exam_cfg: dict | None) -> list[dict]:
     """ترتيب الموديلات المقاسة من **الأقرب للهدف** للأبعد.
 
@@ -218,8 +325,12 @@ __all__ = [
     "TRUST_MIN",
     "axis_pct",
     "baseline_config",
+    "baseline_platform_warning",
     "display_name",
+    "measured_on_gpu",
     "model_axis_pct",
+    "runner_kind",
+    "runner_label",
     "source_badge",
     "source_label",
     "target_axis_pct",

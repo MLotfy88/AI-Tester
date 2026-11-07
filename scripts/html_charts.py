@@ -172,12 +172,12 @@ def radar_svg(
     series: list[dict],
     baseline_values: list[float] | None,
     target_values: list[float] | None = None,
-    target_label: str = "شريط الهدف",
+    target_label: str = "الهدف",
 ) -> str:
-    """رسم SVG سداسي: كل موديل مضلّع + خط الأساس المتقطّع + شريط الهدف.
+    """رسم SVG سداسي: كل موديل مضلّع + خط الأساس المتقطّع + الهدف.
 
     · خط الأساس (المقاس آلياً / المنشور) = متقطّع كهرماني.
-    · شريط الهدف (Gemini 2.5 Pro)        = بنفسجي منقّط (مصدره معلن في الـlegend).
+    · الهدف (Gemini 2.5 Pro)        = بنفسجي منقّط (مصدره معلن في الـlegend).
     """
     width, height = 560, 450
     cx, cy, radius = 280, 220, 155
@@ -211,7 +211,7 @@ def radar_svg(
     if baseline_values:
         pts = _radar_polygon(baseline_values, cx, cy, radius)
         out.append(
-            '<polygon class="radar-baseline" points="%s"><title>خط الأساس (مصدره معلن في الأسفل)</title></polygon>'
+            '<polygon class="radar-baseline" points="%s"><title>المرجع الإضافي (مصدره معلن في الأسفل)</title></polygon>'
             % pts
         )
     if target_values:
@@ -221,7 +221,7 @@ def radar_svg(
             for x, y in _radar_coords(target_values, cx, cy, radius)
         )
         out.append(
-            f'<g class="radar-target"><title>{esc(target_label)} — شريط الهدف (مصدره معلن في الأسفل)</title>'
+            f'<g class="radar-target"><title>{esc(target_label)} — الهدف (مصدره معلن في الأسفل)</title>'
             f'<polygon class="radar-target-poly" points="{pts}"/>{dots}</g>'
         )
     for idx, item in enumerate(series):
@@ -271,12 +271,12 @@ def delta_matrix(results: list[dict], exam_cfg: dict) -> str:
             k: float((base_exam.get("axes") or {}).get(k, {}).get("score") or 0.0)
             for k in ("1", "2", "3", "4")
         }
-        base_name = str(measured.get("model") or "خط الأساس")
+        base_name = str(measured.get("model") or "المرجع الإضافي")
     else:
         published = _baseline(exam_cfg)
         base_total = float(published.get("total") or 0.0)
         base_axes = {k: float(v) for k, v in (published.get("axes") or {}).items()}
-        base_name = str(published.get("name") or "خط الأساس")
+        base_name = str(published.get("name") or "المرجع الإضافي")
 
     rows: list[str] = []
     for result in _ok_models(results):
@@ -303,7 +303,7 @@ def delta_matrix(results: list[dict], exam_cfg: dict) -> str:
                         '<span class="dtrack"></span></div></td>' for _ in range(5))
         rows.append(
             f'<tr class="baseline-row"><td class="model-cell"><div class="model-name">{esc(base_name)}</div>'
-            f'<div class="mut small">خط الأساس · {esc(base_source)}</div></td>{zeros}</tr>'
+            f'<div class="mut small">المرجع الإضافي · {esc(base_source)}</div></td>{zeros}</tr>'
         )
 
     note = (
@@ -350,7 +350,7 @@ def axis_winners(results: list[dict], exam_cfg: dict) -> str:
 
 # --------------------------------------------------------------------------- الأقسام
 def target_ranking_table(results: list[dict], exam_cfg: dict) -> str:
-    """«🎯 الأقرب لشريط الهدف» — ترتيب الموديلات من الأقرب للهدف للأبعد.
+    """«🎯 الأقرب للهدف» — ترتيب الموديلات من الأقرب للهدف للأبعد.
 
     **المسافة** = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً).
     الأرقام المقروءة من `config/exam.yaml → target` (معايرة يدوية).
@@ -392,7 +392,7 @@ def target_ranking_table(results: list[dict], exam_cfg: dict) -> str:
     <tbody>{''.join(rows)}</tbody>
   </table>
 </div>
-<p class="mut small delta-note">Δ = فرق النسبة عن شريط الهدف <b>{esc(str(target.get("name") or ""))}</b>
+<p class="mut small delta-note">Δ = فرق النسبة عن الهدف <b>{esc(str(target.get("name") or ""))}</b>
   (<span class="pill target">{esc(source_badge(target))}</span>) — موجب = أعلى من الهدف.
   <b>المسافة</b> = متوسط |Δ| على المحاور الأربعة · الأقل = الأقرب.</p>
 """
@@ -424,18 +424,18 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
     measured, base_source = measured_baseline_model(results, exam_cfg)
     if measured:
         base_values = radar_values(measured.get("exam") or {}, axes_cfg)
-        base_label = str(measured.get("model") or "خط الأساس")
+        base_label = str(measured.get("model") or "المرجع الإضافي")
         base_total = (measured.get("exam") or {}).get("total")
     else:
         base_values = baseline_radar_values(published, axes_cfg, models)
-        base_label = str(published.get("name") or "خط الأساس")
+        base_label = str(published.get("name") or "المرجع الإضافي")
         base_total = published.get("total")
 
-    # ── شريط الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بيبان في كل رسم
+    # ── الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بيبان في كل رسم
     target = target_config(exam_cfg)
     target_values = target_radar_values(target, axes_cfg) if target else None
     target_total = target.get("total")
-    svg = radar_svg(series, base_values, target_values, str(target.get("name") or "شريط الهدف"))
+    svg = radar_svg(series, base_values, target_values, str(target.get("name") or "الهدف"))
 
     legend = "".join(
         f'<button type="button" class="legend-chip" data-series="{item["id"]}" style="--c:{item["color"]}">'
@@ -445,12 +445,12 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
     )
     base_badge = "مقاس في هذا التشغيل" if measured else "منشور (§0.6)"
 
-    # ── شرائح المراجع في الـlegend: خط الأساس + شريط الهدف
+    # ── شرائح المراجع في الـlegend: خط الأساس + الهدف
     target_chip = ""
     if target:
         target_chip = (
             f'<span class="legend-chip target" title="{esc(str(target.get("note") or ""))}">'
-            f'<i class="dot"></i><span class="lc-name">{esc(target.get("name") or "شريط الهدف")}</span>'
+            f'<i class="dot"></i><span class="lc-name">{esc(target.get("name") or "الهدف")}</span>'
             f'<span class="lc-total num" dir="ltr">{_num(target_total, 1)}</span>'
             f'<span class="lc-badge">{esc(source_badge(target))}</span></span>'
         )
@@ -460,22 +460,22 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
   <div class="section-head">
     <div><h2>⬡ البصمة السداسية للموديلات</h2>
       <p class="sub">كل مضلّع = موديل واحد على 6 محاور (اللهجة، الأمانة، الشغل، المهارات، المجموع، نسبة العامية).
-      مرّر الماوس على أي مضلّع لتشوف أرقامه. المتقطّع الكهرماني = خط الأساس، والمنقّط البنفسجي = شريط الهدف (Gemini 2.5 Pro).</p></div>
+      مرّر الماوس على أي مضلّع لتشوف أرقامه. المتقطّع الكهرماني = المرجع الإضافي، والمنقّط البنفسجي = الهدف (Gemini 2.5 Pro).</p></div>
   </div>
   <div class="radar-layout">
     <div class="card radar-card">
       {svg}
       <div class="legend-chips">{legend}
-        <span class="legend-chip base" title="خط الأساس: {esc(base_source)}"><i class="dot"></i>
-          <span class="lc-name">خط الأساس</span>
+        <span class="legend-chip base" title="المرجع الإضافي: {esc(base_source)}"><i class="dot"></i>
+          <span class="lc-name">المرجع الإضافي</span>
           <span class="lc-total num" dir="ltr">{_num(base_total, 1)}</span></span>
         {target_chip}
       </div>
       <div class="base-source">
-        <b>خط الأساس في الرسم:</b> {esc(base_label)} — <span class="pill muted">{esc(base_badge)}</span>
+        <b>المرجع الإضافي في الرسم:</b> {esc(base_label)} — <span class="pill muted">{esc(base_badge)}</span>
         <div class="mut small">{esc(base_source)}</div>
       </div>
-      {f'<div class="base-source target-src"><b>شريط الهدف في الرسم:</b> {esc(str(target.get("name") or ""))} — <span class="pill target">{esc(source_badge(target))}</span><div class="mut small">{esc(str(target.get("note") or ""))}</div></div>' if target else ''}
+      {f'<div class="base-source target-src"><b>الهدف في الرسم:</b> {esc(str(target.get("name") or ""))} — <span class="pill target">{esc(source_badge(target))}</span><div class="mut small">{esc(str(target.get("note") or ""))}</div></div>' if target else ''}
     </div>
     <div class="decision-panel">
       <div class="card">
@@ -483,17 +483,17 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
         <div class="winners">{axis_winners(results, exam_cfg) or '<span class="mut">مفيش نتائج.</span>'}</div>
       </div>
       <div class="card">
-        <h3 class="panel-title">📏 الفرق عن خط الأساس (نقاط)</h3>
+        <h3 class="panel-title">📏 الفرق عن المرجع الإضافي (نقاط)</h3>
         <p class="mut small">الأخضر = أعلى من الأساس · الأحمر = أقل. النص = الفرق بالنقاط من 100.</p>
         {delta_matrix(results, exam_cfg)}
       </div>
       <div class="card">
-        <h3 class="panel-title">🎯 الأقرب لشريط الهدف ({esc(str(target.get("name") or "الهدف"))})</h3>
+        <h3 class="panel-title">🎯 الأقرب للهدف ({esc(str(target.get("name") or "الهدف"))})</h3>
         <p class="mut small">المسافة = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً). **الأقل = الأقرب للهدف.**</p>
         {target_ranking_table(results, exam_cfg)}
       </div>
       <div class="card note">
-        <b>طريقة القراءة:</b> لو المضلّع <b>داخلي</b> خط الأساس ⇒ أضعف. لو خارجي ومساحة أكبر ⇒ أفضل.
+        <b>طريقة القراءة:</b> لو المضلّع <b>داخلي</b> المرجع الإضافي ⇒ أضعف. لو خارجي ومساحة أكبر ⇒ أفضل.
         ولو المضلّع مش متساوي ⇒ فيه محور ضعيف حتى لو المجموع عالي — وده بالظبط اللي بيفرق في القرار.
         وقارن المضلّع بالمنقّط البنفسجي (الهدف) عشان تعرف قد إيه بقيت من الفجوة.
       </div>
@@ -757,13 +757,13 @@ def scatter_svg(
     y_max: float = 100.0,
     baseline_y: float | None = None,
     target_y: float | None = None,
-    target_label: str = "شريط الهدف",
+    target_label: str = "الهدف",
 ) -> str:
     """مخطط انتشار: الجودة (y) ضد الزمن/السرعة (x) — أداة القرار للمقارنة.
 
     خطان أفقيان مرجعيان:
       · خط الأساس (كهرماني متقطّع).
-      · شريط الهدف — Gemini 2.5 Pro (بنفسجي منقّط).
+      · الهدف — Gemini 2.5 Pro (بنفسجي منقّط).
     """
     if not points:
         return ""
@@ -807,10 +807,10 @@ def scatter_svg(
         by = sy(float(baseline_y))
         out.append(
             f'<line class="ch-baseline" x1="{pad_l}" y1="{by:.1f}" x2="{width - pad_r}" y2="{by:.1f}">'
-            f"<title>خط الأساس: {float(baseline_y):.1f}</title></line>"
+            f"<title>المرجع الإضافي: {float(baseline_y):.1f}</title></line>"
         )
         out.append(
-            f'<text class="ch-base-label" x="{width - pad_r - 4}" y="{by - 6:.1f}" text-anchor="end">خط الأساس</text>'
+            f'<text class="ch-base-label" x="{width - pad_r - 4}" y="{by - 6:.1f}" text-anchor="end">المرجع الإضافي</text>'
         )
 
     if target_y is not None:
@@ -891,7 +891,7 @@ def _verdict_class(verdict: Any) -> str:
 
 
 def _target_reference_card(exam_cfg: dict) -> str:
-    """كارت **شريط الهدف** (Gemini 2.5 Pro) — مرجع مكتمل زي كارت الموديل.
+    """كارت **الهدف** (Gemini 2.5 Pro) — مرجع مكتمل زي كارت الموديل.
 
     بيظهر جنب كروت الموديلات عشان المقارنة تكون مباشرة: نفس الشكل، ونفس
     المحاور الأربعة، بس عليه وسم «هدف» ومصدر معلن (معايرة يدوية).
@@ -931,8 +931,8 @@ def _target_reference_card(exam_cfg: dict) -> str:
       <div class="mc-score"><b class="num" dir="ltr">{_num(total, 1)}</b><small>/100</small></div>
     </div>
     <div class="mc-title">
-      <div class="model-name">🎯 {esc(target.get("name") or "شريط الهدف")}</div>
-      <div class="mut small">شريط الهدف — ليس موديلاً مُشغّلاً</div>
+      <div class="model-name">🎯 {esc(target.get("name") or "الهدف")}</div>
+      <div class="mut small">الهدف — ليس موديلاً مُشغّلاً</div>
       <div class="mc-verdict"><span class="verdict {_verdict_class(target.get("verdict"))}">{esc(str(target.get("verdict") or "—"))}</span></div>
       <div class="mc-gates"><span class="pill target">{esc(source_badge(target))}</span></div>
     </div>
@@ -963,7 +963,7 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
     if measured:
         base_total = float((measured.get("exam") or {}).get("total") or 0.0)
 
-    # ── شريط الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بتظهر معاه المسافة
+    # ── الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بتظهر معاه المسافة
     target = target_config(exam_cfg)
     target_total = float(target.get("total") or 0.0) if target else 0.0
 
@@ -981,7 +981,7 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
         ttft = (perf.get("ttft_ms") or {}).get("avg")
         req = (perf.get("request_seconds") or {}).get("avg")
         ar = float(exam.get("ar_ratio") or 0.0) * 100.0
-        # المسافة عن شريط الهدف (Gemini) — أقل = أقرب
+        # المسافة عن الهدف (Gemini) — أقل = أقرب
         gap = target_gap(exam, target, axes_cfg) if target else {"total": None, "distance": None}
         gap_total = gap.get("total")
         distance = gap.get("distance")
@@ -1058,18 +1058,18 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
 </article>"""
         )
 
-    # ── كارت شريط الهدف أول الكروت (مرجع واضح + مصدر معلن)
+    # ── كارت الهدف أول الكروت (مرجع واضح + مصدر معلن)
     target_card = _target_reference_card(exam_cfg)
     if target_card:
         cards.insert(0, target_card)
 
     base_note = (
-        "خط الأساس = الموديل المرجعي **المقاس في نفس التشغيل** (المقارنة على نفس السياسة ونفس الجهاز)."
+        "المرجع الإضافي = الموديل المرجعي **المقاس في نفس التشغيل** (المقارنة على نفس السياسة ونفس الجهاز)."
         if measured
-        else "خط الأساس = الأرقام **المنشورة** في ورقة الامتحان §0.6."
+        else "المرجع الإضافي = الأرقام **المنشورة** في ورقة الامتحان §0.6."
     )
     target_note = (
-        f"🎯 **شريط الهدف** = {esc(str(target.get('name') or ''))} "
+        f"🎯 **الهدف** = {esc(str(target.get('name') or ''))} "
         f"(<span class=\"pill target\">{esc(source_badge(target))}</span>) — "
         "أرقامه **معايرة يدوية** مش مقيسة، و«المسافة عن الهدف» = متوسط فرق النسبة "
         "على المحاور الأربعة (٠ = مطابق تماماً، **الأقل = الأقرب**)."
@@ -1129,14 +1129,14 @@ def speed_table_section(results: list[dict], exam_cfg: dict) -> str:
 </tr>"""
         )
 
-    # ── صف مرجعي: شريط الهدف (Gemini 2.5 Pro) — مش مُشغّل محلياً ⇒ السرعة غير مقيسة
+    # ── صف مرجعي: الهدف (Gemini 2.5 Pro) — مش مُشغّل محلياً ⇒ السرعة غير مقيسة
     target = target_config(exam_cfg)
     if target:
         dashes = "".join('<td class="num" dir="ltr">—</td>' for _ in range(13))
         summary_rows.append(
             f"""
 <tr class="target-row">
-  <td class="model-cell"><div class="model-name">🎯 {esc(target.get('name') or 'شريط الهدف')}</div>
+  <td class="model-cell"><div class="model-name">🎯 {esc(target.get('name') or 'الهدف')}</div>
     <div class="mut small">{esc(source_badge(target))} — شريط هدف، مش موديل مُشغّل على الجهاز</div></td>
   {dashes}
 </tr>"""
@@ -1254,7 +1254,7 @@ def charts_section(results: list[dict], exam_cfg: dict) -> str:
         else float(published.get("total") or 0.0)
     )
 
-    # ── شريط الهدف (Gemini 2.5 Pro): خط أفقي في الانتشار + عمود في الأعمدة
+    # ── الهدف (Gemini 2.5 Pro): خط أفقي في الانتشار + عمود في الأعمدة
     target = target_config(exam_cfg)
     target_y = float(target.get("total") or 0.0) if target else None
     if target:
@@ -1266,7 +1266,7 @@ def charts_section(results: list[dict], exam_cfg: dict) -> str:
         target_values.append(float(target.get("total") or 0.0))
         series.append(
             {
-                "label": str(target.get("name") or "شريط الهدف"),
+                "label": str(target.get("name") or "الهدف"),
                 "color": TARGET_COLOR,
                 "values": target_values,
                 "is_target": True,
@@ -1282,7 +1282,7 @@ def charts_section(results: list[dict], exam_cfg: dict) -> str:
         x_max=(max(xs) * 1.2) if xs else None,
         baseline_y=base_y or None,
         target_y=target_y or None,
-        target_label=str(target.get("name") or "شريط الهدف"),
+        target_label=str(target.get("name") or "الهدف"),
     )
     legend = "".join(
         f'<span class="legend-chip" style="--c:{item["color"]}"><i class="dot"></i>'
@@ -1297,7 +1297,7 @@ def charts_section(results: list[dict], exam_cfg: dict) -> str:
     <div><h2>📊 رسوم المقارنة</h2>
       <p class="sub">الأعمدة = الدرجة النسبية على كل محور (0–100%) لكل موديل.
       والنقطة = الموديل: كلما كانت أعلى كلما أفضل، وكلما كانت على الشمال (أقل زمن) كلما أسرع.
-      <b>شريط الهدف (Gemini 2.5 Pro)</b> موجود في الرسمين: عمود بنفسجي في الأعمدة، وخط أفقي في الانتشار.</p></div>
+      <b>الهدف (Gemini 2.5 Pro)</b> موجود في الرسمين: عمود بنفسجي في الأعمدة، وخط أفقي في الانتشار.</p></div>
     <div class="legend-chips">{legend}</div>
   </div>
   <div class="grid2">
@@ -1308,7 +1308,7 @@ def charts_section(results: list[dict], exam_cfg: dict) -> str:
     <div class="card chart-card">
       <h3 class="panel-title">الجودة مقابل الزمن</h3>
       {scatter_svg_html}
-      <p class="mut small">الخط الأفقي الكهرماني = خط الأساس، والبنفسجي = شريط الهدف ({esc(str(target.get("name") or "الهدف"))} · {esc(source_badge(target))}).
+      <p class="mut small">الخط الأفقي الكهرماني = المرجع الإضافي، والبنفسجي = الهدف ({esc(str(target.get("name") or "الهدف"))} · {esc(source_badge(target))}).
       الموديل فوق الخطوط وبـ x صغير = أحسن اختيار.</p>
     </div>
   </div>

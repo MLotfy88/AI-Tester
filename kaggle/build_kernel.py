@@ -25,8 +25,8 @@ INCLUDE = ("scripts", "config", "prompts", "templates")
 
 # ملاحظة: أسماء الـ accelerator بتتغير من نسخة للتانية في Kaggle CLI.
 # بنكتبها في الميتاداتا + بنتحقق جوه الـ notebook إن الكارت هو المتوقع (Cell 2).
+# Kaggle حالياً بيدي T4×2 (كارت واحد فعلياً) — P100 اتشال من المنصة.
 ACCELERATORS = {
-    "p100": "nvidiaTeslaP100",
     "t4x2": "nvidiaTeslaT4",
 }
 
@@ -130,7 +130,7 @@ def build(
         "max_gib": max_gib,
         "model_timeout": model_timeout,
         "total_timeout": total_timeout,
-        "gpu_expect": ["P100", "T4"] if accelerator in ACCELERATORS else [],
+        "gpu_expect": ["T4"] if accelerator in ACCELERATORS else [],
         "accelerator": ACCELERATORS.get(accelerator, ""),
     }
 

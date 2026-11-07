@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       quant_pattern:
-        description: "نمط اسم ملف الـ quant (مثال: Q4_K_M)"
+        description: "نمط اسم ملف الـ quant (مثال: Q4_K_M) — أو auto لاختيار أفضل متاح"
         required: true
         default: "Q4_K_M"
         type: string
@@ -22,11 +22,11 @@ on:
         default: "4096"
         type: string
       accelerator:
-        description: "الكارت على Kaggle (P100 أقرب لسلوك Maxwell)"
+        description: "الكارت على Kaggle — T4×2 (كارت واحد فعلياً)"
         required: true
         type: choice
-        options: [p100, t4x2]
-        default: p100
+        options: [t4x2]
+        default: t4x2
       policy:
         description: "سياسة التصحيح (paper = ورقة الامتحان الصارمة)"
         required: false
@@ -63,7 +63,7 @@ concurrency:
 
 jobs:
   kaggle:
-    name: "تشغيل على Kaggle GPU (P100/T4 مع محاكاة جهازك)"
+    name: "تشغيل على Kaggle GPU T4×2 (محاكاة جهازك)"
     runs-on: ubuntu-latest
     timeout-minutes: 355
 
@@ -90,7 +90,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install kaggle
+          # kaggle CLI محتاج six صراحةً في الإصدارات الحالية (كان بيفشل بـ
+          # ModuleNotFoundError: No module named 'six' قبل أي رفع).
+          pip install "kaggle>=1.6.17" six
 
       - name: Build the Kaggle kernel (no push)
         run: |

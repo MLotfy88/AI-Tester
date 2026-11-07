@@ -5,7 +5,7 @@
 الخطوات: بناء الـ kernel ← `kaggle kernels push` ← انتظار ← `kaggle kernels output`.
 
 المتطلبات:
-  · مكتبة kaggle: `pip install kaggle`
+  · مكتبة kaggle: `pip install "kaggle>=1.6.17" six` (من غير six بيفشل الـ CLI)
   · التوكن: KAGGLE_USERNAME و KAGGLE_KEY كمتغيرات بيئة (أو ~/.kaggle/kaggle.json)
 
 تحذيرات من تقارير المستخدمين (لم نتحقق منها):
@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -40,6 +41,29 @@ def run_cli(args: list[str], *, check: bool = False, timeout: int = 300) -> subp
     if check and proc.returncode != 0:
         raise SystemExit(f"❌ فشل الأمر: kaggle {' '.join(args)}\n{output[-3000:]}")
     return proc
+
+
+def ensure_kaggle_cli() -> None:
+    """يتأكد إن Kaggle CLI شغّال، ويشرح الإصلاح لو ناقص six."""
+    if not shutil.which("kaggle"):
+        raise SystemExit(
+            "❌ أمر `kaggle` مش موجود. ثبّته بـ:\n"
+            '   pip install "kaggle>=1.6.17" six'
+        )
+    try:
+        proc = run_cli(["--version"], timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"❌ تعذّر تشغيل Kaggle CLI: {exc}") from exc
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        if "No module named 'six'" in output:
+            raise SystemExit(
+                "❌ Kaggle CLI محتاج مكتبة `six` (ModuleNotFoundError).\n"
+                "   الحل: pip install six\n"
+                f"   تفاصيل: {output[-800:]}"
+            )
+        raise SystemExit(f"❌ Kaggle CLI مش شغّال:\n{output[-1200:]}")
+    print(f"✅ Kaggle CLI: {output.splitlines()[0] if output else 'OK'}")
 
 
 def ensure_credentials(username: str | None, key: str | None, kaggle_json: Path | None = None) -> str:
@@ -113,6 +137,7 @@ def main() -> int:
     ap.add_argument("--push-only", action="store_true", help="رفع واستنى من غير تنزيل مخرجات")
     args = ap.parse_args()
 
+    ensure_kaggle_cli()
     user = ensure_credentials(args.owner or None, None)
     kernel_name = args.kernel_name or f"exam-{time.strftime('%Y%m%d-%H%M')}"
 
@@ -149,8 +174,9 @@ def main() -> int:
     print(output[-2500:])
     if proc.returncode != 0:
         raise SystemExit(
-            "❌ فشل الرفع. لو الرسالة عن الـ accelerator: شيله من kernel-metadata.json "
-            "واختار الكارت من واجهة Kaggle ثم أعد المحاولة."
+            "❌ فشل الرفع. لو الرسالة عن `six` نفّذ: pip install six. "
+            "ولو الرسالة عن الـ accelerator: شيله من kernel-metadata.json "
+            "واختار الكارت من واجهة Kaggle ثم أعد المحاولة.\n" + output[-1200:]
         )
 
     print(f"⏳ الانتظار (حد أقصى {args.timeout_min} دقيقة)…")

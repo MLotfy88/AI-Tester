@@ -32,7 +32,16 @@ from exam.grader import grade_exam  # noqa: E402
 from exam_runner import run_exam  # noqa: E402
 from excel_report import write_workbook  # noqa: E402
 from fit_check import analyze as analyze_fit  # noqa: E402
-from references import display_name, source_badge, target_gap, trust_flag_for  # noqa: E402
+from references import (  # noqa: E402
+    baseline_platform_warning,
+    display_name,
+    infer_runner_meta,
+    measured_on_gpu,
+    runner_label,
+    source_badge,
+    target_gap,
+    trust_flag_for,
+)
 from hf_resolver import (  # noqa: E402
     HFError,
     cleanup_model,
@@ -80,6 +89,7 @@ def _local_manifest(path: Path) -> dict:
         "sha": sha256_file(p),
         "license": "local",
         "quant_pattern": "local",
+        "quant_chosen": p.name,
         "files": [{"path": p.name, "local_path": str(p), "bytes": p.stat().st_size}],
         "primary_path": str(p),
         "total_bytes": p.stat().st_size,
@@ -89,6 +99,7 @@ def _local_manifest(path: Path) -> dict:
 
 
 def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
+    run_meta = infer_runner_meta(run_meta, results)
     baseline = exam_cfg.get("baseline") or {}
     target = exam_cfg.get("target") or {}
     axes_cfg = exam_cfg.get("axes") or {}
@@ -102,6 +113,9 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         f"max_tokens={exam_cfg.get('settings', {}).get('max_tokens')}",
         f"- **سياسة التصحيح:** {run_meta.get('policy', 'paper')} · "
         f"الوضع: {run_meta.get('template_mode', 'auto')} · الكمية: {run_meta.get('quant_pattern', 'Q4_K_M')}",
+        f"- **بيئة التشغيل:** {runner_label(run_meta)} — "
+        + ("أرقام السرعة **مقيسة فعلياً على GPU**." if measured_on_gpu(run_meta)
+           else "تشغيل CPU (مفيش GPU) — أرقام السرعة مقيسة على المعالج."),
         "",
         "| # | الموديل | الحالة | الدرجة /100 | درجة المقارنة (baseline) | الحكم | غير موثوق (②) | ① | ② | ③ | ④ | البوابات | Fit | ⚡ tok/s (مقيس) | الزمن | Δ الهدف | المسافة عن الهدف |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
@@ -144,7 +158,7 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         b_axes = baseline.get("axes") or {}
         b_cells = " | ".join(f"{b_axes.get(k, '—')}/{((axes_cfg.get(k) or {}).get('max'), '—')[0]}" for k in ("1", "2", "3", "4"))
         lines.append(
-            f"| — | **{baseline.get('name', 'خط الأساس')}** | مرجع | {baseline.get('total', '—')} | "
+            f"| — | **{baseline.get('name', 'المرجع الإضافي')}** | مرجع | {baseline.get('total', '—')} | "
             f"{baseline.get('total', '—')} | {baseline.get('verdict', '')} | "
             f"{trust_flag_for(baseline, axes_cfg) or '—'} | {b_cells} | "
             f"{'، '.join(baseline.get('gates') or []) or 'سليمة'} | — | — | — | — | — |"
@@ -153,13 +167,13 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         t_axes = target.get("axes") or {}
         t_cells = " | ".join(f"{t_axes.get(k, '—')}/{((axes_cfg.get(k) or {}).get('max'), '—')[0]}" for k in ("1", "2", "3", "4"))
         lines.append(
-            f"| — | **🎯 {target.get('name', 'شريط الهدف')}** | هدف | {target.get('total', '—')} | "
+            f"| — | **🎯 {target.get('name', 'الهدف')}** | هدف | {target.get('total', '—')} | "
             f"{target.get('total', '—')} | {target.get('verdict', '')} | — | {t_cells} | "
             f"{'، '.join(target.get('gates') or []) or 'سليمة'} | — | — | — | — | 0.00 | 0.0 |"
         )
         lines += [
             "",
-            f"> **🎯 شريط الهدف ({target.get('name')}):** **{target.get('total')}/100** · "
+            f"> **🎯 الهدف ({target.get('name')}):** **{target.get('total')}/100** · "
             f"المصدر: **{target.get('note') or source_badge(target)}** · "
             "أرقامه **معايرة يدوية** (مش مقيسة آلياً) ⇒ بتظهر كـ«هدف» مش كـ«مقاس». "
             "**«المسافة عن الهدف»** = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً، الأقل = الأقرب).",
@@ -167,10 +181,14 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     if baseline:
         lines += [
             "",
-            f"> **📏 خط الأساس للمقارنة ({baseline.get('name')}):** **{baseline.get('total')}/100** · "
+            f"> **📏 المرجع الإضافي ({baseline.get('name')}) — مش الهدف:** **{baseline.get('total')}/100** · "
             f"المصدر: **{baseline.get('note') or source_badge(baseline)}** · "
-            "ده الموديل المرجعي **المقاس آلياً** بنفس المصحّح ⇒ المقارنة عليه صحيحة.",
+            "ده الموديل المرجعي **المقاس آلياً** بنفس المصحّح ⇒ بيستخدم كمؤشر إضافي، "
+            "لكن الهدف الأساسي في التقرير هو Gemini 2.5 Pro.",
         ]
+    platform_warning = baseline_platform_warning(exam_cfg, run_meta)
+    if platform_warning:
+        lines += ["", f"> ⚠ **فرق بيئة القياس:** {platform_warning}"]
 
     if any(
         (r.get("runtime") or {}).get("gpu_contention", {}).get("competing_processes")
@@ -185,7 +203,7 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         lines += [
             "",
             "> **درجات المقارنة (baseline):** نفس الفحوص بدون عواقب البوابات وبدون عقوبة الطول — "
-            "وهي المقياس اللي اتقاس بيه خط الأساس المنشور 61.6، فالمقارنة لازم تكون على العمود ده.",
+            "وهي المقياس اللي اتقاس بيه الرقم المرجعي المنشور 61.6، فالمقارنة لازم تكون على العمود ده.",
         ]
     g5_scope = str(
         ((exam_cfg.get("settings") or {}).get("g5_reasoning_channel") or "visible")
@@ -223,13 +241,15 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             "",
             "### الإعدادات الفعلية لكل موديل",
             "",
-            "| الموديل | المصدر | القالب | KV | ngl | threads | device | flash-attn |",
-            "|---|---|---|---|---|---|---|---|",
+            "| الموديل | quant | المصدر | القالب | KV | ngl | threads | device | flash-attn |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for model, st in settings_rows:
             rt = next((r.get("runtime") or {} for r in results if r.get("model") == model), {})
+            manifest = next((r.get("manifest") or {} for r in results if r.get("model") == model), {})
             lines.append(
-                f"| `{model}` | {st.get('source') or '—'} | {st.get('chat_template') or '—'} | "
+                f"| `{model}` | {manifest.get('quant_chosen') or manifest.get('quant_pattern') or '—'} | "
+                f"{st.get('source') or '—'} | {st.get('chat_template') or '—'} | "
                 f"{st.get('kv_cache_type') or rt.get('kv') or '—'} | "
                 f"{st.get('n_gpu_layers') if st.get('n_gpu_layers') is not None else rt.get('ngl', '—')} | "
                 f"{st.get('threads') if st.get('threads') is not None else rt.get('threads', '—')} | "
@@ -261,14 +281,14 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     if baseline:
         lines += [
             "",
-            f"**خط الأساس:** {baseline.get('name', '')} — **{baseline.get('total')}/100** · "
+            f"**📏 المرجع الإضافي:** {baseline.get('name', '')} — **{baseline.get('total')}/100** · "
             f"{baseline.get('verdict', '')} · بوابات: {'، '.join(baseline.get('gates') or []) or 'سليمة'} · "
             f"المصدر: {baseline.get('note') or source_badge(baseline)}",
         ]
     if target:
         lines += [
             "",
-            f"**🎯 شريط الهدف:** {target.get('name', '')} — **{target.get('total')}/100** · "
+            f"**🎯 الهدف:** {target.get('name', '')} — **{target.get('total')}/100** · "
             f"{target.get('verdict', '')} · المصدر: {target.get('note') or source_badge(target)}",
         ]
     lines += [
@@ -333,7 +353,7 @@ def main() -> int:
         "--template-mode",
         default="auto",
         choices=["auto", "exam", "model"],
-        help="auto=قالب الامتحان (مقارنة عادلة) · exam=قالب الامتحان · model=القالب المدمج في GGUF",
+        help="auto=Qwen يستخدم قالب الامتحان، وأي عائلة تانية تستخدم قالبها المدمج · exam=قالب الامتحان دايماً · model=القالب المدمج في GGUF",
     )
     ap.add_argument("--overrides", default="config/model_overrides.yaml", help="توصيات الموديلات")
     ap.add_argument(
@@ -345,7 +365,7 @@ def main() -> int:
         "--policy",
         default="paper",
         choices=["paper", "baseline"],
-        help="paper=قواعد ورقة الامتحان كاملة · baseline=مطابق لخط الأساس المنشور 61.6",
+        help="paper=قواعد ورقة الامتحان كاملة · baseline=مطابق للرقم المرجعي المنشور 61.6",
     )
     ap.add_argument("--system-prompt", default="prompts/owner_system_prompt.txt")
     ap.add_argument("--exam", default="config/exam.yaml")
@@ -358,6 +378,14 @@ def main() -> int:
     ap.add_argument("--startup-timeout", type=float, default=900.0)
     ap.add_argument("--limit", type=int, default=0, help="حد أسئلة للتجربة السريعة (0 = الكل)")
     ap.add_argument("--device", default="", help="device للـ offload (مثال: Vulkan0، CUDA0)")
+    ap.add_argument(
+        "--runner-kind",
+        default="",
+        choices=["", "kaggle_gpu", "github_cpu", "local_gpu", "local_cpu", "custom"],
+        help="بيئة التشغيل — بتحدد وسم التقرير (افتراضي: حسب --device)",
+    )
+    ap.add_argument("--runner-label", default="", help="وسم مخصّص لبيئة التشغيل (اختياري)")
+    ap.add_argument("--runner-gpu", default="", help="اسم الكارت الفعلي (مثال: Tesla T4)")
     ap.add_argument("--flash-attn", default="", choices=["", "on", "off", "auto"])
     ap.add_argument("--extra-server-args", default="", help="أعلام llama-server إضافية مفصولة بمسافات")
     ap.add_argument("--keep-models", action="store_true")
@@ -400,6 +428,7 @@ def main() -> int:
     run_id = args.run_id or time.strftime("%Y%m%d-%H%M%S")
     extra_args = args.extra_server_args.split() if args.extra_server_args else []
     overrides = load_overrides(args.overrides)
+    runner_kind = args.runner_kind or ("local_gpu" if args.device else "local_cpu")
     run_meta: dict[str, Any] = {
         "run_id": run_id,
         "started_at": now_iso(),
@@ -421,6 +450,9 @@ def main() -> int:
         "apply_recommended_sampling": bool(args.apply_recommended_sampling),
         "system_prompt": args.system_prompt,
         "mode": "llama-server /v1/chat/completions",
+        "runner_kind": runner_kind,
+        "runner_label": args.runner_label,
+        "runner_gpu": args.runner_gpu,
         "platform": platform.platform(),
         "python": platform.python_version(),
         "exam_version": exam_cfg.get("version"),
@@ -437,6 +469,7 @@ def main() -> int:
         args.template_mode,
     )
     logger.info("template=%s · prompt=%s", template_path, prompt_path)
+    logger.info("بيئة التشغيل: %s (kind=%s · gpu=%s)", runner_label(run_meta), runner_kind, args.runner_gpu or "—")
     if args.dry_run:
         for model in models:
             logger.info("DRY · %s", model)
@@ -492,6 +525,11 @@ def main() -> int:
                     Path(manifest["primary_path"]).name,
                     human_bytes(manifest["total_bytes"]),
                     len(manifest["files"]),
+                )
+                logger.info(
+                    "الكمية المختارة: %s (النمط المطلوب: %s)",
+                    manifest.get("quant_chosen") or Path(manifest["primary_path"]).name,
+                    manifest.get("quant_pattern") or args.quant,
                 )
 
             # ── الإعدادات الفعلية للموديل (overrides + توصيات تلقائية)

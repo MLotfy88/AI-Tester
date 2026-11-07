@@ -18,6 +18,11 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from common import fmt_num, human_bytes, now_iso
 from references import (
+    baseline_platform_warning,
+    infer_runner_meta,
+    measured_on_gpu,
+    runner_kind,
+    runner_label,
     source_badge,
     target_config,
     target_gap,
@@ -148,7 +153,7 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
         "tok/s فعلي",
         "توليد tok/s (مقيس)",
         "أول استجابة ms (مقيس)",
-        "الفرق عن الأساس",
+        "الفرق عن المرجع",
         "الفرق عن الهدف (Gemini)",
         "المسافة عن الهدف",
         "ملاحظة",
@@ -211,7 +216,7 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
         ws.append(
             [
                 "—",
-                base.get("name", "خط الأساس"),
+                base.get("name", "المرجع الإضافي"),
                 "مرجع",
                 base.get("total"),
                 base.get("total"),
@@ -242,7 +247,7 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
         ws.append(
             [
                 "—",
-                f"🎯 {target.get('name', 'شريط الهدف')}",
+                f"🎯 {target.get('name', 'الهدف')}",
                 "هدف",
                 target.get("total"),
                 target.get("total"),
@@ -275,7 +280,7 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
     ranked = target_ranking([r for r in results if r.get("exam")], exam_cfg)
     if ranked:
         ws.append([])
-        ws.append(["🎯 ترتيب القرب من شريط الهدف", target.get("name", ""), source_badge(target)])
+        ws.append(["🎯 ترتيب القرب من الهدف", target.get("name", ""), source_badge(target)])
         _style_header(ws, row=ws.max_row)
         ws.append(["#", "الموديل", "المجموع", "Δ ① %", "Δ ② %", "Δ ③ %", "Δ ④ %", "Δ المجموع", "المسافة"])
         _style_header(ws, row=ws.max_row)
@@ -709,6 +714,21 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
     target = target_config(exam_cfg)
     target_axes = target.get("axes") or {}
     target_axes_text = "، ".join(f"{k}: {v}" for k, v in target_axes.items()) or "—"
+    if runner_kind(run_meta) == "kaggle_gpu":
+        speed_note = (
+            f"السرعة المقيسة على {runner_label(run_meta)} — GPU حقيقي. "
+            "الكارت أسرع من Quadro M4000M؛ أعمدة tg/pp تقديرية لجهازك المستهدف."
+        )
+    elif measured_on_gpu(run_meta):
+        speed_note = (
+            f"السرعة المقيسة على {runner_label(run_meta)} — GPU حقيقي. "
+            "أعمدة tg/pp تقديرية بنفس بيئة التشغيل."
+        )
+    else:
+        speed_note = (
+            f"السرعة المقيسة على {runner_label(run_meta)} — CPU (ngl=0). "
+            "أعمدة tg/pp تقديرية لجهازك المستهدف."
+        )
     rows: list[tuple[Any, Any, str]] = [
         ("تاريخ التقرير", now_iso(), "UTC"),
         ("بداية التشغيل", run_meta.get("started_at", "—"), ""),
@@ -724,24 +744,29 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
         ("max_tokens", settings.get("max_tokens"), "ثابت"),
         ("max_answer_chars", settings.get("max_answer_chars"), "أطول من كده ⇒ عقوبة"),
         ("length_penalty", settings.get("length_penalty"), ""),
-        ("baseline name", baseline.get("name", "—"), "خط الأساس للمقارنة"),
+        ("baseline name", baseline.get("name", "—"), "المرجع الإضافي — مش الهدف"),
         ("baseline source", baseline.get("source_kind", "—"), baseline.get("note", "")),
         ("baseline total", baseline.get("total", "—"), "الموديل الأساس بالمصحح الحتمي"),
         ("baseline axes", baseline_axes_text, ""),
         ("baseline gates", "، ".join(baseline.get("gates") or []), ""),
-        ("target name", target.get("name", "—"), "شريط الهدف (Gemini 2.5 Pro)"),
+        ("target name", target.get("name", "—"), "الهدف (Gemini 2.5 Pro)"),
         ("target source", target.get("source_kind", "—"), target.get("note", "")),
         ("target total", target.get("total", "—"), "معايرة يدوية — مش مقيس آلياً"),
         ("target axes", target_axes_text, ""),
         ("قالب المحادثة", exam_cfg.get("runtime", {}).get("template", ""), ""),
         ("system prompt", exam_cfg.get("runtime", {}).get("system_prompt", ""), ""),
         ("طريقة التشغيل", run_meta.get("mode", "llama-server /v1/chat/completions"), ""),
-        ("منصة الـ runner", platform.platform(), ""),
+        ("بيئة التشغيل", runner_label(run_meta), "مصدر وسم التقرير"),
+        ("GPU الفعلي", run_meta.get("runner_gpu") or "—", "لو فاضي ⇒ مفيش GPU"),
+        ("نظام التشغيل", run_meta.get("platform") or platform.platform(), ""),
         ("Python", platform.python_version(), ""),
-        ("ملاحظة السرعة", "حسابات tg/pp نظرية لجهازك المستهدف", "GitHub runner CPU فقط — مفيش GPU"),
+        ("ملاحظة السرعة", speed_note, "المقيس هو الأساس — السقوف النظرية ثانوية"),
         ("ملاحظة المقارنة", "كل الموديلات بنفس المصحح والإعدادات", "مفيش LLM-judge"),
         ("وسم غير موثوق", "على المحور ② فقط (أقل من 18/28)", "مش حكم كلي — الحكم على مجموع الدرجات"),
     ]
+    platform_warning = baseline_platform_warning(exam_cfg, run_meta)
+    if platform_warning:
+        rows.append(("⚠ فرق بيئة القياس", platform_warning, "المرجع الإضافي اتقاس على جهاز مختلف"))
     for row in rows:
         ws.append(list(row))
 
@@ -755,6 +780,15 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
         ws.append(["llama.cpp", version, "من --version"])
     for result in results:
         runtime = result.get("runtime") or {}
+        manifest = result.get("manifest") or {}
+        if manifest:
+            ws.append(
+                [
+                    f"quant — {result.get('model', '')}",
+                    manifest.get("quant_chosen") or manifest.get("quant_pattern") or "—",
+                    f"النمط المطلوب: {manifest.get('quant_pattern') or '—'}",
+                ]
+            )
         if not runtime:
             continue
         ws.append([f"قالب SHA — {result.get('model', '')}", runtime.get("template_sha256", "—"), ""])
@@ -990,7 +1024,7 @@ def _speed_detail_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> N
 def build_workbook(results: list[dict], exam_cfg: dict, run_meta: dict | None = None) -> Workbook:
     wb = Workbook()
     wb.remove(wb.active)
-    run_meta = run_meta or {}
+    run_meta = infer_runner_meta(run_meta, results)
 
     ws = wb.create_sheet("Summary")
     _summary_sheet(ws, results, exam_cfg)
