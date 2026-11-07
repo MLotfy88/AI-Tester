@@ -171,12 +171,26 @@ def build_from_source(
         if cuda_arch:
             cmake += [f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}"]
         print(f"بناء CUDA (arch={cuda_arch or 'auto'}) — ده بياخد وقت أطول.")
-    run_cmd(cmake, cwd=src, log_path=log)
-    run_cmd(
-        ["cmake", "--build", str(build), "--config", "Release", "--target", "llama-server", "-j", str(jobs)],
-        cwd=src,
-        log_path=log,
-    )
+    try:
+        run_cmd(cmake, cwd=src, log_path=log, timeout=600)
+    except SystemExit:
+        # اطبع ذيل اللوج قبل الخروج
+        if log.exists():
+            print("--- install.log (آخر 50 سطر) ---")
+            print(tail_text(log, 50))
+        raise
+    try:
+        run_cmd(
+            ["cmake", "--build", str(build), "--config", "Release", "--target", "llama-server", "-j", str(jobs)],
+            cwd=src,
+            log_path=log,
+            timeout=1200,
+        )
+    except SystemExit:
+        if log.exists():
+            print("--- install.log (آخر 80 سطر) ---")
+            print(tail_text(log, 80))
+        raise
 
     server = _find_server(build / "bin") or _find_server(build)
     if not server:
