@@ -26,7 +26,7 @@ import sys
 import time
 import zipfile
 
-PARAMS = json.loads(r"__PARAMS_JSON__")
+PARAMS = json.loads(__PARAMS_JSON__)
 PROJECT_B64 = "__PROJECT_B64__"
 
 WORK = pathlib.Path("/kaggle/working")

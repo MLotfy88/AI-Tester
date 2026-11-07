@@ -136,7 +136,9 @@ def build(
 
     project_b64, files_count = project_zip_b64()
     template = TEMPLATE.read_text(encoding="utf-8")
-    source = template.replace("__PARAMS_JSON__", json.dumps(params, ensure_ascii=False))
+    # Double-encode JSON: inner for the actual params, outer to escape for Python string context
+    params_json = json.dumps(json.dumps(params, ensure_ascii=False))
+    source = template.replace("__PARAMS_JSON__", params_json)
     source = source.replace("__PROJECT_B64__", project_b64)
     cells = split_cells(source)
 
