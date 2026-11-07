@@ -198,8 +198,24 @@ def main() -> int:
     print(f"⏳ الانتظار (حد أقصى {args.timeout_min} دقيقة)…")
     state = wait_for_kernel(info["kernel_id"], timeout_min=args.timeout_min, poll_s=args.poll)
     if state != "complete":
-        print(f"⚠ انتهى الانتظار بحالة: {state} — جرّب تنزّل المخرجات الجزئية:")
-        print(f"   kaggle kernels output {info['kernel_id']} -p out_kaggle/{info['slug']}")
+        print(f"⚠ انتهى الانتظار بحالة: {state} — بنزّل المخرجات الجزئية…")
+        # نزّل المخرجات حتى لو فشل عشان نشوف اللوجز
+        try:
+            out_dir = Path(args.out) if args.out else Path("out_kaggle") / info["slug"]
+            out_dir.mkdir(parents=True, exist_ok=True)
+            proc = run_cli(
+                ["kernels", "output", info["kernel_id"], "-p", str(out_dir)],
+                timeout=900,
+            )
+            print((proc.stdout or "")[-2500:])
+            if proc.stderr:
+                print(proc.stderr[-1000:])
+            files = sorted(p for p in out_dir.rglob("*") if p.is_file())
+            print(f"\n📁 المخرجات الجزئية ({len(files)} ملف):")
+            for path in files[:40]:
+                print(f"   {path} ({path.stat().st_size / 1024:.1f} KiB)")
+        except Exception as e:
+            print(f"⚠ فشل تنزيل المخرجات الجزئية: {e}")
         return 2
 
     if args.push_only:
