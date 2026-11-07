@@ -169,6 +169,7 @@ def _reference_card(
     source_kind: str,
     default_name: str,
     trust_flag: str = "",
+    card_id: str = "",
 ) -> str:
     """كارت مرجع (هدف أو خط أساس) — دايماً بيقول الرقم ده **جاى منين**."""
     name = str(cfg.get("name") or default_name)
@@ -190,8 +191,9 @@ def _reference_card(
         f'<span class="trust-flag" title="{esc(str(cfg.get("trust_note") or ""))}">{esc(trust_flag)}</span>'
         if trust_flag else ""
     )
+    id_attr = f' id="{esc(card_id)}"' if card_id else ""
     return f"""
-<div class="ref-card {kind_cls}">
+<div class="ref-card {kind_cls}"{id_attr}>
   <div class="ref-head">
     <span class="ref-icon">{icon}</span>
     <span class="ref-title">{esc(title)}</span>
@@ -251,6 +253,10 @@ def _hero(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     {speed_block}
   </div>
   <aside class="hero-side">
+    <div class="ref-controls" id="ref-controls">
+      <label class="ref-check"><input type="checkbox" id="show-target" checked> 🎯 إظهار الهدف (Gemini 2.5 Pro)</label>
+      <label class="ref-check"><input type="checkbox" id="show-baseline" checked> 📏 إظهار المرجع الإضافي (Qwen3.5-4B)</label>
+    </div>
     {_reference_card(
         target,
         title="الهدف — Gemini 2.5 Pro",
@@ -259,6 +265,7 @@ def _hero(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         source_kind=str(target.get("source_kind") or "manual"),
         default_name="Gemini 2.5 Pro",
         trust_flag=trust_flag_for(target, exam_cfg.get("axes") or {}),
+        card_id="ref-target",
     )}
     {_reference_card(
         baseline,
@@ -268,6 +275,7 @@ def _hero(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         source_kind=str(baseline.get("source_kind") or "measured"),
         default_name="Qwen3.5-4B-IQ4_XS",
         trust_flag=trust_flag_for(baseline, exam_cfg.get("axes") or {}),
+        card_id="ref-baseline",
     )}
   </aside>
 </section>
@@ -1133,7 +1141,12 @@ main{max-width:1320px;margin:0 auto;padding:26px 20px 60px}
 .chip{display:inline-flex;gap:5px;align-items:center;background:var(--inset);border:1px solid var(--bd);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--mut)}
 .chip.sm{font-size:11px;padding:2px 8px}
 .hero-side{display:flex;flex-direction:column;gap:12px;min-width:0}
-/* كروت المرجع: الهدف + خط الأساس — كل واحد بيقول مصدره */
+/* أدوات التحكم في ظهور المراجع */
+.ref-controls{display:flex;gap:14px;margin-bottom:4px;flex-wrap:wrap}
+.ref-check{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--txt);padding:6px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--bd);transition:background .15s}
+.ref-check:hover{background:var(--inset)}
+.ref-check input{accent-color:var(--accent);width:14px;height:14px}
+/* كروت المرجع: الهدف + المرجع الإضافي — كل واحد بيقول مصدره */
 .ref-card{flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;
   background:var(--panel);border:1px solid var(--bd);border-radius:var(--r);padding:17px 18px;box-shadow:var(--shadow);min-width:0}
 .ref-card.src-manual{border-color:rgba(167,139,250,.45);background:linear-gradient(160deg,rgba(167,139,250,.14),var(--panel))}
@@ -1463,6 +1476,29 @@ JS = r"""
   });
   const printBtn=document.getElementById("print");
   if(printBtn) printBtn.addEventListener("click",()=>window.print());
+
+  // ── إظهار/إخفاء المراجع (الهدف + المرجع الإضافي) مع حفظ في localStorage
+  function initRefToggles(){
+    const targetCard=document.getElementById("ref-target");
+    const baselineCard=document.getElementById("ref-baseline");
+    const targetCheck=document.getElementById("show-target");
+    const baselineCheck=document.getElementById("show-baseline");
+    if(!targetCard||!baselineCard||!targetCheck||!baselineCheck) return;
+    const savedTarget=localStorage.getItem("exam-show-target");
+    const savedBaseline=localStorage.getItem("exam-show-baseline");
+    if(savedTarget!=="null") targetCheck.checked=savedTarget==="true";
+    if(savedBaseline!=="null") baselineCheck.checked=savedBaseline==="true";
+    function apply(){
+      targetCard.style.display=targetCheck.checked?"":"none";
+      baselineCard.style.display=baselineCheck.checked?"":"none";
+      localStorage.setItem("exam-show-target",targetCheck.checked);
+      localStorage.setItem("exam-show-baseline",baselineCheck.checked);
+    }
+    apply();
+    targetCheck.addEventListener("change",apply);
+    baselineCheck.addEventListener("change",apply);
+  }
+  initRefToggles();
 
   // قبل الطباعة: افتح كل الأسئلة المقفولة عشان الـ PDF يحتوي كل الإجابات،
   // وبعد الطباعة رجّع الحالة الأصلية.

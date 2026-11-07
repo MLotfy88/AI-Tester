@@ -1,10 +1,7 @@
 # مخرجات التشغيل المحلي
 out/
-out_local/
-out_multi/
 models/
 tmp_report_test/
-tmp_*.html
 
 # llama.cpp المحلي (يُبنى أو يُحمّل تلقائياً)
 .llama/
