@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------------------
+# ملف مواصفات الجهاز المستهدف (Target device)
+# المصدر: HF-Model-Selection-Workflow.md — الملحق E
+# كل الأحجام بالـ GiB (1 GiB = 1,073,741,824 bytes)
+# ---------------------------------------------------------------------------
+name: my-laptop
+
+cpu:
+  model: "Intel Core i7-6920HQ"
+  cores: 4
+  threads: 8
+  base_ghz: 2.9
+  turbo_all_core_ghz: 3.4
+  avx2: true
+  avx512: false
+
+ram:
+  total_gib: 16.0
+  usable_gib: 15.9
+  channels: 2
+  type: "DDR4-2133"
+  bw_theoretical_gbps: 34.1
+  bw_effective_gbps: 27.0
+
+gpu:
+  model: "Quadro M4000M"
+  arch: "Maxwell GM204"
+  compute_capability: "5.2"
+  cuda_cores: 1280
+  vram_gib: 4.0
+  bw_gbps: 160.0
+  fp32_tflops: 2.496
+  pcie: "3.0 x16"
+
+igpu:
+  model: "Intel HD Graphics 530"
+  shared_mem_mib: 128
+
+storage:
+  - {model: "PNY CS2230 1TB", size_gb: 932}
+  - {model: "Micron MTFDHBA512TDV", size_gb: 477}
+
+os:
+  name: "Windows 10 Pro"
+  version: "22H2"
+  build: "19045.6466"
+
+budgets:
+  vram_budget_gib: 3.4
+  compute_buffer_gib: 0.3
+
+# معاملات المعايرة: null = السقف النظري (غير معاير)
+calibration:
+  gpu_tg: null
+  cpu_tg: null
+  gpu_pp: null
+  cpu_pp: null

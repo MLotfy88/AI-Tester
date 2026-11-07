@@ -1,0 +1,152 @@
+name: Exam Benchmark (GGUF)
+
+run-name: "امتحان المساعد المصري · ${{ inputs.models }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "repo ids على Hugging Face مفصولة بفاصلة (مثال: owner/model-GGUF,owner/other-GGUF)"
+        required: true
+        type: string
+      quant_pattern:
+        description: "نمط اسم ملف الـ quant (مثال: Q4_K_M)"
+        required: true
+        default: "Q4_K_M"
+        type: string
+      ctx_size:
+        description: "حجم السياق — لازم 4096 لأن ورقة الامتحان ثابتة"
+        required: true
+        default: "4096"
+        type: string
+      device_profile:
+        description: "ملف مواصفات جهازك المستهدف (لحساب fit والسرعة النظرية)"
+        required: false
+        default: "config/device_profile.yaml"
+        type: string
+      threads:
+        description: "عدد threads على الـ runner (مش بيأثر على الإجابات)"
+        required: false
+        default: "4"
+        type: string
+      kv_cache_type:
+        description: "نوع KV cache (f16 أبطأ شوية وأدق؛ q8_0 أصغر)"
+        required: false
+        type: choice
+        options: [f16, q8_0]
+        default: f16
+      llama_tag:
+        description: "tag لـ llama.cpp مثل b7050 أو latest"
+        required: false
+        default: "latest"
+        type: string
+      max_download_gib:
+        description: "حد أقصى لحجم ملف GGUF الواحد (GiB)"
+        required: false
+        default: "10"
+        type: string
+      model_timeout_minutes:
+        description: "حد أقصى لدقائق الموديل الواحد (الإجمالي محمي بـ 330 دقيقة)"
+        required: false
+        default: "300"
+        type: string
+      keep_models:
+        description: "الإبقاء على ملفات GGUF بعد الانتهاء (مش مستحسن)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exam-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  exam:
+    name: "تشغيل متسلسل على llama.cpp (CPU)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      MODELS: ${{ inputs.models }}
+      QUANT: ${{ inputs.quant_pattern }}
+      CTX: ${{ inputs.ctx_size }}
+      DEVICE_PROFILE: ${{ inputs.device_profile }}
+      THREADS: ${{ inputs.threads }}
+      KV: ${{ inputs.kv_cache_type }}
+      LLAMA_TAG: ${{ inputs.llama_tag }}
+      MAX_GIB: ${{ inputs.max_download_gib }}
+      MODEL_TIMEOUT: ${{ inputs.model_timeout_minutes }}
+      KEEP_FLAG: ${{ inputs.keep_models && '--keep-models' || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache llama.cpp
+        uses: actions/cache@v4
+        with:
+          path: .llama
+          key: llama-${{ runner.os }}-${{ inputs.llama_tag }}-cpu-v2
+
+      - name: Install / reuse llama.cpp
+        run: |
+          python scripts/install_llamacpp.py \
+            --dir .llama \
+            --tag "$LLAMA_TAG" \
+            --jobs 4
+
+      - name: Verify llama-server
+        run: |
+          test -x .llama/bin/llama-server
+          .llama/bin/llama-server --version || true
+
+      - name: Run the 21-question exam
+        run: |
+          python scripts/run_exam.py \
+            --models "$MODELS" \
+            --quant "$QUANT" \
+            --ctx "$CTX" \
+            --kv "$KV" \
+            --threads "$THREADS" \
+            --device-profile "$DEVICE_PROFILE" \
+            --server .llama/bin/llama-server \
+            --max-gib "$MAX_GIB" \
+            --model-timeout "$MODEL_TIMEOUT" \
+            --total-timeout 330 \
+            $KEEP_FLAG
+
+      - name: Job summary
+        if: always()
+        run: cat out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exam-report-${{ github.run_id }}
+          path: |
+            out/exam-results.xlsx
+            out/exam-report.html
+            out/summary.md
+            out/run.log
+            out/logs/*.log
+          if-no-files-found: warn
+          retention-days: 30

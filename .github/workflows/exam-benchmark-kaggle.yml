@@ -1,0 +1,137 @@
+name: Exam Benchmark (Kaggle GPU)
+
+run-name: "امتحان المساعد المصري على Kaggle · ${{ inputs.models }}"
+
+# لوحة التحكم: من هنا بتحدد الموديلات والإعدادات، والتنفيذ الفعلي على Kaggle GPU.
+# المتطلبات: Secrets باسم KAGGLE_USERNAME و KAGGLE_KEY (من kaggle.com → Settings → API).
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "repo ids على Hugging Face مفصولة بفاصلة (نماذج عامة فقط)"
+        required: true
+        type: string
+      quant_pattern:
+        description: "نمط اسم ملف الـ quant (مثال: Q4_K_M)"
+        required: true
+        default: "Q4_K_M"
+        type: string
+      ctx_size:
+        description: "حجم السياق — لازم 4096 لأن ورقة الامتحان ثابتة"
+        required: true
+        default: "4096"
+        type: string
+      accelerator:
+        description: "الكارت على Kaggle (P100 أقرب لسلوك Maxwell)"
+        required: true
+        type: choice
+        options: [p100, t4x2]
+        default: p100
+      policy:
+        description: "سياسة التصحيح (paper = ورقة الامتحان الصارمة)"
+        required: false
+        type: choice
+        options: [paper, baseline]
+        default: paper
+      vram_budget_gib:
+        description: "ميزانية VRAM المحاكاة (جهازك = 3.4)"
+        required: false
+        default: "3.4"
+        type: string
+      ram_budget_gib:
+        description: "الرام المتاحة المحاكاة (جهازك = 15.9)"
+        required: false
+        default: "15.9"
+        type: string
+      threads:
+        description: "عدد threads (جهازك = 8)"
+        required: false
+        default: "8"
+        type: string
+      max_minutes:
+        description: "أقصى انتظار للـ kernel بالدقائق"
+        required: false
+        default: "350"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exam-kaggle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kaggle:
+    name: "تشغيل على Kaggle GPU (P100/T4 مع محاكاة جهازك)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      MODELS: ${{ inputs.models }}
+      QUANT: ${{ inputs.quant_pattern }}
+      CTX: ${{ inputs.ctx_size }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install kaggle
+
+      - name: Build the Kaggle kernel (no push)
+        run: |
+          python kaggle/build_kernel.py \
+            --models "$MODELS" \
+            --quant "$QUANT" \
+            --ctx "$CTX" \
+            --owner "$KAGGLE_USERNAME" \
+            --kernel-name "exam-${GITHUB_RUN_ID}" \
+            --accelerator "${{ inputs.accelerator }}" \
+            --policy "${{ inputs.policy }}" \
+            --vram-gib "${{ inputs.vram_budget_gib }}" \
+            --ram-gib "${{ inputs.ram_budget_gib }}" \
+            --threads "${{ inputs.threads }}"
+
+      - name: Push to Kaggle, wait, and download outputs
+        run: |
+          python kaggle/run_on_kaggle.py \
+            --models "$MODELS" \
+            --quant "$QUANT" \
+            --ctx "$CTX" \
+            --owner "$KAGGLE_USERNAME" \
+            --kernel-name "exam-${GITHUB_RUN_ID}" \
+            --accelerator "${{ inputs.accelerator }}" \
+            --policy "${{ inputs.policy }}" \
+            --vram-gib "${{ inputs.vram_budget_gib }}" \
+            --ram-gib "${{ inputs.ram_budget_gib }}" \
+            --threads "${{ inputs.threads }}" \
+            --timeout-min "${{ inputs.max_minutes }}"
+
+      - name: Job summary
+        if: always()
+        run: |
+          cat out_kaggle/*/summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exam-kaggle-${{ github.run_id }}
+          path: |
+            out_kaggle/**
+          if-no-files-found: warn
+          retention-days: 30
