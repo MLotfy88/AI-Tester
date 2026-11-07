@@ -10,10 +10,12 @@
 - ملخص Markdown يظهر في صفحة GitHub Actions.
 - سجلات نصية للتشغيل.
 
-> 📌 **مرجع مستقل:** مجلد `Final AI Test/` فيه نسخة نهائية من ملفَّي التوثيق + كل سكربتات
-> الامتحان والتصحيح، عشان تقدر تستخدمه كمرجع basic بعيد عن الأداة نفسها.
-> 📌 **امتحان بدون أداة:** مجلد `Final Exam Core/` فيه **الامتحان والمصحّح وتوزيع الدرجات فقط**
-> (بدون التنزيل ولا التشغيل ولا التقارير) + `EXAM-WEAKNESSES-AND-FIXES.md` (نقاط الضعف فقط).
+> 📌 **نسخة واحدة بس:** **جذر المستودع هو الأداة** — فيه كل حاجة (الـworkflows · السكربتات ·
+> الإعدادات · ورقة الامتحان · المصحّح · التقارير · الاختبارات). مفيش نسخة تانية منه في المستودع.
+> 📌 **نسختان مرجعتان (مخرجات بناء، مش جزء من المستودع):** تتولّدا في مجلد `dist/` بأمرين:
+> `python scripts/build_final_reference.py` ⇒ `dist/Final AI Test/` (مرجع كامل للاستخدام بأي أداة)
+> و `python scripts/build_exam_core.py` ⇒ `dist/Final Exam Core/` (الامتحان + المصحّح + توزيع
+> الدرجات + `EXAM-WEAKNESSES-AND-FIXES.md` فقط). كل واحدة مع `MANIFEST.md` بـ SHA-256.
 > 📌 **سجل الأخطاء:** [`GRADING-ERRORS-AND-FIXES.md`](GRADING-ERRORS-AND-FIXES.md) — كل خطأ
 > ظهر في التصحيح، سبب ظهوره، الكود قبل/بعد، والأثر بالأرقام.
 
@@ -581,8 +583,7 @@
 | `README.md` | هذا الملف. |
 | `requirements.txt` | اعتماديات Python: `gguf`, `huggingface_hub`, `openpyxl`, `psutil`, `PyYAML`. |
 | `.gitignore` | يستبعد `out/`, `models/`, `.llama/`, caches, وبيئات Python المحلية. |
-| `Final AI Test/` | **نسخة مرجعية مستقلة**: ملفَّي التوثيق + ملف توثيق الأخطاء + نسخة كل سكربتات الامتحان والتصحيح + الأداة كاملة. مرجع basic للاستخدام بأي أداة. |
-| `Final Exam Core/` | **الامتحان والمصحّح فقط**: ورقة الامتحان + `config/exam.yaml` + `scripts/exam/*` + `EXAM-WEAKNESSES-AND-FIXES.md` (نقاط الضعف فقط) + MANIFEST. بدون تنزيل ولا تشغيل ولا تقارير. |
+| `dist/` (**مخرجات بناء، مش مرفوع**) | `dist/Final AI Test/` = مرجع مستقل كامل + MANIFEST. `dist/Final Exam Core/` = الامتحان والمصحّح + توزيع الدرجات + نقاط الضعف فقط + MANIFEST. اتنين بيتولّدوا بأمرين (§7) وما بيترفعوش للـrepo. |
 
 ### 7.2 الإعدادات والموارد الثابتة
 
@@ -665,8 +666,8 @@ calibration: {gpu_tg: null, cpu_tg: null, gpu_pp: null, cpu_pp: null}
 | `scripts/excel_report.py` | بناء شيتات Excel العشرة وتنسيقها (RTL، ألوان، فلاتر، تجميد رؤوس) — منها `Performance` (المقيس) و`SpeedDetail` (زمن كل سؤال × كل موديل). |
 | `scripts/html_report.py` | بناء تقرير HTML عربي مستقل من نفس النتائج. |
 | `scripts/html_charts.py` | الرسوم والسجلات: الرسم السداسي (SVG)، لوحة القرار (الفرق عن الأساس + الأفضل في كل محور)، **كارت لكل موديل**، **جدول السرعة لكل سؤال**، **رسوم المقارنة** (أعمدة + انتشار)، كارت الإعدادات، سجل الإجابات الكامل. |
-| `scripts/build_final_reference.py` | يبني مجلد `Final AI Test/` (نسخة مرجعية مستقلة + MANIFEST بـ SHA-256). |
-| `scripts/build_exam_core.py` | يبني مجلد `Final Exam Core/` (الامتحان + المصحّح + توزيع الدرجات + نقاط الضعف فقط + MANIFEST). |
+| `scripts/build_final_reference.py` | يبني `dist/Final AI Test/` (نسخة مرجعية مستقلة + MANIFEST بـ SHA-256). |
+| `scripts/build_exam_core.py` | يبني `dist/Final Exam Core/` (الامتحان + المصحّح + توزيع الدرجات + نقاط الضعف فقط + MANIFEST). |
 | `scripts/verify_manifest.py` | يتحقق إن كل ملف في مجلد المرجع مطابق لبصمة SHA-256 في الـ MANIFEST. |
 | `scripts/exam/__init__.py` | تعريف حزمة التصحيح. |
 | `scripts/exam/lib.py` | أدوات النص: تطبيع الأرقام العربية، إزالة التشكيل، كشف الجداول/الخطوات/الكود، تشغيل Python في sandbox محدود. |

@@ -6,6 +6,9 @@ models/
 tmp_report_test/
 tmp_*.html
 
+# النسختان المرجعتان — مخرجات بناء (بتتولّد بـ scripts/build_*.py)
+dist/
+
 # llama.cpp المحلي (يُبنى أو يُحمّل تلقائياً)
 .llama/
 

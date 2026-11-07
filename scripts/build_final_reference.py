@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEST = ROOT / "Final AI Test"
+DEST = ROOT / "dist" / "Final AI Test"
 
 DOCS = [
     "EXAM-PAPER-v1.md",
