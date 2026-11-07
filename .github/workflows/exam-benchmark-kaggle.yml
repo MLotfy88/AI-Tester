@@ -70,7 +70,7 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
 
     steps:
       - name: Checkout
@@ -93,7 +93,7 @@ jobs:
       - name: Build the Kaggle kernel (no push)
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
           python kaggle/build_kernel.py \
             --models "${{ inputs.models }}" \
@@ -110,7 +110,7 @@ jobs:
       - name: Push to Kaggle, wait, and download outputs
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
           python kaggle/run_on_kaggle.py \
             --models "${{ inputs.models }}" \
