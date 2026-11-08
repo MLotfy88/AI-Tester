@@ -4,15 +4,15 @@
 # ده الـ notebook اللي بيتولّد تلقائياً من `kaggle/build_kernel.py` ومش بيتعدّل بالإيد.
 # بيعمل الآتي:
 # 1. يتأكد إن الكارت T4 (وإلا يوقف فوراً — نتايج على كارت تاني مضللة).
-# 2. يحجز **ballast** رام وVRAM علشان يبقي المتاح زي جهازك المستهدف بالظبط.
-# 3. يبني llama.cpp بـ CUDA (أو ينزّل release جاهز).
+# 2. يبني llama.cpp بـ CUDA (أو ينزّل release جاهز).
+# 3. **يحجز ballast رام وVRAM** (بعد البناء، قبل التحميل) علشان يبقي المتاح زي جهازك المستهدف بالظبط.
 # 4. ينزّل موديلات GGUF من Hugging Face (نماذج **عامة فقط** — Kaggle Secrets بتتشال مع CLI push).
 # 5. يشغّل نفس الـ 21 سؤال بنفس الإعدادات ويكتب Excel + HTML + summary.md في Output.
 #
 # ⚠ لم يُختبر على Kaggle من قبلنا بعد — لو حصل خطأ، اقرأ رسالته وعدّل ثم أعد التشغيل.
 
 # %% [markdown]
-# ## Cell: المعاملات + فك ضغط المشروع
+# ## Cell 1: المعاملات + فك ضغط المشروع
 
 # %%
 import base64
@@ -47,7 +47,7 @@ files_count = sum(1 for _ in EXAM.rglob("*") if _.is_file())
 print(f"✅ فك ضغط المشروع: {files_count} ملف في {EXAM}")
 
 # %% [markdown]
-# ## Cell: فحص الكارت (يفشل لو مش P100/T4)
+# ## Cell 2: فحص الكارت (يفشل لو مش T4)
 
 # %%
 def sh(cmd, **kwargs):
@@ -81,7 +81,40 @@ if "t4" in gpu_name.lower() or gpu_cap.startswith("7."):
 print(f"✅ GPU: {gpu_name} · compute {gpu_cap} · CUDA arch={cuda_arch or 'auto'}")
 
 # %% [markdown]
-# ## Cell: حجز RAM ballast (محاكاة 15.9 GiB متاحة)
+# ## Cell 3: تثبيت المتطلبات + بناء llama.cpp بـ CUDA
+
+# %%
+subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pyyaml", "openpyxl"], check=False)
+
+llama_dir = WORK / "llama"
+install_cmd = [
+    sys.executable,
+    str(EXAM / "scripts" / "install_llamacpp.py"),
+    "--dir",
+    str(llama_dir),
+    "--tag",
+    str(PARAMS.get("llama_tag") or "latest"),
+    "--backend",
+    "cuda",
+    "--cuda-arch",
+    cuda_arch,
+    "--jobs",
+    "4",
+]
+print("$", " ".join(install_cmd))
+# timeout 60 دقيقة للبناء (master branch بياخد وقت أطول)
+proc = subprocess.run(install_cmd, capture_output=True, text=True, timeout=3600)
+print(proc.stdout[-4000:])
+if proc.returncode != 0:
+    print(proc.stderr[-4000:])
+    raise SystemExit(f"❌ فشل تثبيت llama.cpp (exit={proc.returncode})")
+server_bin = llama_dir / "bin" / "llama-server"
+if not server_bin.exists():
+    raise SystemExit(f"❌ llama-server مش موجود في {server_bin}")
+print("✅ llama-server:", server_bin)
+
+# %% [markdown]
+# ## Cell 4: حجز RAM/VRAM ballast (محاكاة جهازك — بعد البناء، قبل التحميل)
 
 # %%
 import numpy as np  # noqa: E402
@@ -110,10 +143,7 @@ while need > 0:
     need -= size
 print(f"✅ RAM ballast محجوز: {sum(b.nbytes for b in ram_blocks) / 1024**3:.1f} GiB")
 
-# %% [markdown]
-# ## Cell: حجز VRAM ballast (محاكاة ميزانية 3.4 GiB)
-
-# %%
+# %% VRAM ballast
 import torch  # noqa: E402
 
 target_vram_gib = float(PARAMS.get("vram_gib") or 3.4)
@@ -136,39 +166,7 @@ print(
 )
 
 # %% [markdown]
-# ## Cell: تثبيت المتطلبات + بناء llama.cpp بـ CUDA
-
-# %%
-subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pyyaml", "openpyxl"], check=False)
-
-llama_dir = WORK / "llama"
-install_cmd = [
-    sys.executable,
-    str(EXAM / "scripts" / "install_llamacpp.py"),
-    "--dir",
-    str(llama_dir),
-    "--tag",
-    str(PARAMS.get("llama_tag") or "latest"),
-    "--backend",
-    "cuda",
-    "--cuda-arch",
-    cuda_arch,
-    "--jobs",
-    "4",
-]
-print("$", " ".join(install_cmd))
-proc = subprocess.run(install_cmd, capture_output=True, text=True)
-print(proc.stdout[-4000:])
-if proc.returncode != 0:
-    print(proc.stderr[-4000:])
-    raise SystemExit(f"❌ فشل تثبيت llama.cpp (exit={proc.returncode})")
-server_bin = llama_dir / "bin" / "llama-server"
-if not server_bin.exists():
-    raise SystemExit(f"❌ llama-server مش موجود في {server_bin}")
-print("✅ llama-server:", server_bin)
-
-# %% [markdown]
-# ## Cell: تشغيل الامتحان (21 سؤال — نفس ورقة الامتحان ونفس الإعدادات)
+# ## Cell 5: ملف جهاز محاكاة + تشغيل الامتحان
 
 # %%
 # ── ملف جهاز محاكاة: نفس مواصفات جهازك (Quadro M4000M / 15.9 GiB RAM)
@@ -251,7 +249,7 @@ if proc.stderr:
 print(f"exit={proc.returncode} · المدة {(time.time() - started) / 60:.1f} دقيقة")
 
 # %% [markdown]
-# ## Cell: تجميع المخرجات (Excel + HTML + logs) في Output
+# ## Cell 6: تجميع المخرجات (Excel + HTML + logs) في Output
 
 # %%
 dest = WORK / "exam-out-final"

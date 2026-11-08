@@ -190,7 +190,7 @@ def build_from_source(
             ["cmake", "--build", str(build), "--config", "Release", "--target", "llama-server", "-j", str(jobs)],
             cwd=src,
             log_path=log,
-            timeout=1200,
+            timeout=3600,  # 60 دقيقة للبناء (master branch بياخد وقت أطول)
         )
     except SystemExit:
         if log.exists():
