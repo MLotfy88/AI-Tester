@@ -1,0 +1,27 @@
+2026-11-07 18:54:15 | INFO    | run_id=run-20261107-185414 · models=2 · quant=Q4_K_M · ctx=4096 · policy=paper · template-mode=auto
+2026-11-07 18:54:15 | INFO    | template=F:\App-Projects\hermes-assistant\AI Online Tester\templates\qwen35_egyptian_nothink.jinja · prompt=F:\App-Projects\hermes-assistant\AI Online Tester\prompts\owner_system_prompt.txt
+2026-11-07 18:54:15 | INFO    | ════════════════════════════════════════════════════════════════════════
+2026-11-07 18:54:15 | INFO    | [1/2] C:\Users\MLotfy\.lmstudio\models\unsloth\Qwen3.5-4B-GGUF\Qwen3.5-4B-IQ4_XS.gguf
+2026-11-07 18:54:15 | INFO    | مهلة الموديل: 120.0 دقيقة (المتبقي من الكلي: 300.0)
+2026-11-07 18:54:24 | INFO    | موديل محلي: C:\Users\MLotfy\.lmstudio\models\unsloth\Qwen3.5-4B-GGUF\Qwen3.5-4B-IQ4_XS.gguf (2.31 GiB)
+2026-11-07 18:55:00 | INFO    | fit=Full GPU · ngl=32/32 · KV=0.5 GiB · tg=64.6 tok/s
+2026-11-07 18:55:00 | INFO    | الإعدادات المطبّقة [defaults]: لا توجد توصيات خاصة — استُخدمت الإعدادات العامة · قالب المحادثة: قالب الامتحان (للمقارنة العادلة) · KV cache: f16 · threads: 8 · device: Vulkan0 · توصيات التوليد (معروضة بس — لا تُطبَّق افتراضياً): notes= [المصدر: overrides]
+2026-11-07 18:55:00 | WARNING | تنبيه: قالب الموديل المدمج مختلف عن قالب الامتحان — في وضع 'exam' استُخدم قالب الامتحان للحفاظ على قابلية المقارنة.
+2026-11-07 19:17:37 | INFO    | انتهى التشغيل: 1356.5s · peak RSS 0 MiB · سليم
+2026-11-07 19:17:37 | INFO    | النتيجة: 54.27/100 · مرفوض 🔴 · بوابات: G6، G7
+2026-11-07 19:17:37 | INFO    | checkpoint: exam-results.xlsx · exam-report.html
+2026-11-07 19:17:37 | INFO    | ════════════════════════════════════════════════════════════════════════
+2026-11-07 19:17:37 | INFO    | [2/2] C:\Users\MLotfy\.lmstudio\models\mmlotfy\qwen3.5-4b-egyptian\Qwen3.5-4B-Egyptian-Stage1-Q4_K_M.gguf
+2026-11-07 19:17:37 | INFO    | مهلة الموديل: 120.0 دقيقة (المتبقي من الكلي: 276.6)
+2026-11-07 19:17:47 | INFO    | موديل محلي: C:\Users\MLotfy\.lmstudio\models\mmlotfy\qwen3.5-4b-egyptian\Qwen3.5-4B-Egyptian-Stage1-Q4_K_M.gguf (2.59 GiB)
+2026-11-07 19:18:25 | INFO    | fit=Partial · ngl=31/33 · KV=0.516 GiB · tg=44.2 tok/s
+2026-11-07 19:18:25 | INFO    | الإعدادات المطبّقة [defaults]: لا توجد توصيات خاصة — استُخدمت الإعدادات العامة · قالب المحادثة: قالب الامتحان (للمقارنة العادلة) · KV cache: f16 · threads: 8 · device: Vulkan0 · توصيات التوليد (معروضة بس — لا تُطبَّق افتراضياً): notes= [المصدر: overrides]
+2026-11-07 19:18:25 | WARNING | تنبيه: قالب الموديل المدمج مختلف عن قالب الامتحان — في وضع 'exam' استُخدم قالب الامتحان للحفاظ على قابلية المقارنة.
+2026-11-07 19:48:02 | INFO    | انتهى التشغيل: 1776.9s · peak RSS 0 MiB · سليم
+2026-11-07 19:48:02 | INFO    | النتيجة: 29.8/100 · مرفوض 🔴 · بوابات: G7، G8
+2026-11-07 19:48:03 | INFO    | checkpoint: exam-results.xlsx · exam-report.html
+2026-11-07 19:48:03 | INFO    | checkpoint: exam-results.xlsx · exam-report.html
+2026-11-07 19:48:03 | INFO    | ════════════════════════════════════════════════════════════════════════
+2026-11-07 19:48:03 | INFO    | الخلاصة: 2/2 موديل مكتمل · التقرير: F:\App-Projects\hermes-assistant\AI Online Tester\out_multi\exam-report.html
+2026-11-07 19:48:03 | INFO    |   C:\Users\MLotfy\.lmstudio\models\unsloth\Qwen3.5-4B-GGUF\Qwen3.5-4B-IQ4_XS.gguf  54.27/100  مرفوض 🔴  (G6، G7)
+2026-11-07 19:48:03 | INFO    |   C:\Users\MLotfy\.lmstudio\models\mmlotfy\qwen3.5-4b-egyptian\Qwen3.5-4B-Egyptian-Stage1-Q4_K_M.gguf  29.80/100  مرفوض 🔴  (G7، G8)

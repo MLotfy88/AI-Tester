@@ -170,8 +170,10 @@ def build_from_source(
         cmake += ["-DGGML_CUDA=ON"]
         if cuda_arch:
             cmake += [f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}"]
-        # إصلاح CUDA 13.x على Kaggle: تمرير paths صريحة
+        # إصلاح CUDA 13.x على Kaggle: إضافة GGML_CUDA_NO_VMM=ON لتخطي الربط بـ CUDA::cuda_driver
+        # اللي مش متاح في CUDAToolkit package + تمرير paths صريحة
         cmake += [
+            "-DGGML_CUDA_NO_VMM=ON",
             "-DCUDAToolkit_ROOT=/usr/local/cuda",
             "-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc",
         ]
