@@ -106,7 +106,7 @@ jobs:
             --vram-gib "${{ inputs.vram_budget_gib }}" \
             --ram-gib "${{ inputs.ram_budget_gib }}" \
             --threads "${{ inputs.threads }}" \
-            --llama-tag "b4936"
+            --llama-tag "master"
 
       - name: Push to Kaggle, wait, and download outputs
         env:
@@ -124,7 +124,7 @@ jobs:
             --vram-gib "${{ inputs.vram_budget_gib }}" \
             --ram-gib "${{ inputs.ram_budget_gib }}" \
             --threads "${{ inputs.threads }}" \
-            --llama-tag "b4936" \
+            --llama-tag "master" \
             --timeout-min "${{ inputs.max_minutes }}"
 
       - name: Job summary
