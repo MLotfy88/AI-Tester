@@ -170,11 +170,15 @@ def build_from_source(
         cmake += ["-DGGML_CUDA=ON"]
         if cuda_arch:
             cmake += [f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}"]
+        # إصلاح CUDA 13.x على Kaggle: تمرير paths صريحة
+        cmake += [
+            "-DCUDAToolkit_ROOT=/usr/local/cuda",
+            "-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc",
+        ]
         print(f"بناء CUDA (arch={cuda_arch or 'auto'}) — ده بياخد وقت أطول.")
     try:
         run_cmd(cmake, cwd=src, log_path=log, timeout=600)
     except SystemExit:
-        # اطبع ذيل اللوج قبل الخروج
         if log.exists():
             print("--- install.log (آخر 50 سطر) ---")
             print(tail_text(log, 50))
