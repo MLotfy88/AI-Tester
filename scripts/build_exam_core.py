@@ -43,6 +43,7 @@ CODE = [
     "scripts/exam/checks_lg_hn.py",
     "scripts/exam/checks_if_dc.py",
     "scripts/exam/checks_br_tl.py",
+    "scripts/exam/checks_profile.py",
     "tests/test_smoke.py",
 ]
 
