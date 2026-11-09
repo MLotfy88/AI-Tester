@@ -53,13 +53,38 @@ def _find_server(root: Path) -> Path | None:
     return None
 
 
-def _collect_bin(server: Path, dest: Path) -> Path:
+def _collect_bin(server: Path, dest: Path, *, extra_roots: list[Path] | None = None) -> Path:
+    """ينسخ الـ binaries + كل الـ shared libraries لمجلد واحد.
+
+    ⚠ **مهم:** `llama-server` في نسخة master بقى binary صغير بيربط على
+    `libllama-server-impl.so` (وكمان libggml-* و libllama-*). لو الـ libs
+    دي ما اتنسختش جنب الـ binary ⇒ `error while loading shared libraries`.
+
+    كمان بننسخ كل `.so` من أي مكان تاني في شجرة البناء (مش بس مجلد
+    الـ binary)، لأن بعض مكتبات CMake بتطلع في `build/src` لا `build/bin`.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     src_dir = server.parent
+    copied: set[str] = set()
     for item in src_dir.iterdir():
-        if item.is_file():
+        if not item.is_file():
+            continue
+        target = dest / item.name
+        shutil.copy2(item, target)
+        copied.add(item.name)
+    # مكتبات-share من أي مكان تاني في شجرة البناء
+    for root in extra_roots or []:
+        if not root.exists():
+            continue
+        for item in root.rglob("*.so*"):
+            if not item.is_file() or item.name in copied:
+                continue
             target = dest / item.name
-            shutil.copy2(item, target)
+            try:
+                shutil.copy2(item, target)
+                copied.add(item.name)
+            except OSError:
+                continue
     target_server = dest / server.name
     st = target_server.stat()
     target_server.chmod(st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -117,7 +142,7 @@ def try_release(
         if not server:
             print("— الـ zip مفيهوش llama-server —")
             return None
-        final = _collect_bin(server, dest)
+        final = _collect_bin(server, dest, extra_roots=[extract])
         write_text(
             dest.parent / "llama_version.txt",
             f"source=release\nrelease_tag={rel.get('tag_name')}\nasset={asset.get('name')}\n"
@@ -165,6 +190,14 @@ def build_from_source(
         "-DLLAMA_BUILD_TESTS=OFF",
         "-DLLAMA_BUILD_EXAMPLES=ON",
         "-DLLAMA_BUILD_SERVER=ON",
+        # ⚠ نسخ llama.cpp master بيربط `llama-server` على `libllama-server-impl.so`
+        #    ومكتبات CUDA. الـ RPATH الافتراضي بيبقى مسار مطلق لشجرة البناء،
+        #    وبعد ما بننسخ الـ bin لمجلد تاني وبنمسح الشجرة ⇒
+        #    `error while loading shared libraries`.
+        #    `$ORIGIN` بتخلي الـ binary يلاقي مكتباته اللي جنبه في أي مكان.
+        "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+        "-DCMAKE_INSTALL_RPATH=$ORIGIN",
+        "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF",
     ]
     if backend == "cuda":
         cmake += ["-DGGML_CUDA=ON"]
@@ -201,7 +234,7 @@ def build_from_source(
     server = _find_server(build / "bin") or _find_server(build)
     if not server:
         raise SystemExit(f"البناء نجح لكن llama-server مش موجود. راجع {log}")
-    final = _collect_bin(server, dest)
+    final = _collect_bin(server, dest, extra_roots=[build])
     write_text(
         dest.parent / "llama_version.txt",
         f"source=source\ncommit={commit}\ntag={tag or 'master'}\n"
@@ -259,12 +292,31 @@ def main() -> int:
             args.tag, dest, args.jobs, log, backend=args.backend, cuda_arch=args.cuda_arch
         )
 
-    # اختبار سريع للنسخة
-    proc = run_cmd([str(server), "--version"], check=False, quiet=True, timeout=60)
+    # اختبار سريع للنسخة — ⚠ لازم ينجح فعلاً:
+    # في التشغيل السابق على Kaggle ظهر خطأ تحميل المكتبات وexit code فضل 0،
+    # فالسيرفر المكسور اتشغّل وكمل الامتحان على المعالج (-ngl 0).
+    env = dict(os.environ)
+    lib_dir = str(dest)
+    parts = [p for p in env.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
+    if lib_dir not in parts:
+        parts.insert(0, lib_dir)
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
+    proc = run_cmd([str(server), "--version"], check=False, quiet=True, timeout=60, env=env)
     version = (proc.stdout or "") + (proc.stderr or "")
     print(version.strip()[:800])
     with (base / "llama_version.txt").open("a", encoding="utf-8") as fh:
         fh.write(f"version_output={version.strip()[:500]}\n")
+    if "error while loading shared libraries" in version or "cannot open shared object" in version:
+        raise SystemExit(
+            "❌ llama-server مبقاش بيشتغل (مكتبات مش لاقية):\n"
+            f"{version.strip()[:800]}\n"
+            "الحل: تأكد إن كل ملفات .so متنسخة جنب الـ binary، وإن الـ build "
+            "اتعمل بـ -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH=$ORIGIN."
+        )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"❌ llama-server --version فشل (exit={proc.returncode}):\n{version.strip()[:800]}"
+        )
     print(f"LLAMA_SERVER={server}")
     return 0
 

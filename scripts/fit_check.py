@@ -138,7 +138,7 @@ def read_chat_template(path: str | Path) -> str:
 def estimate(
     meta: dict,
     file_bytes: int,
-    ctx: int = 4096,
+    ctx: int = 8192,
     budget_gib: float = 3.4,
     compute_gib: float = 0.3,
     kv_type: str = "f16",
@@ -228,7 +228,8 @@ def speed_model(est: dict, file_bytes: int, params_b: float, dev: dict | None = 
 
 def load_cfg(profile_path: str | Path | None, cli: dict) -> dict:
     cfg = {
-        "ctx": 4096,
+        # ctx ثابت = 8192 (ورقة الامتحان v3) — أي قيمة تانية مرفوضة من run_exam.py
+        "ctx": 8192,
         "budget": 3.4,
         "compute": 0.3,
         "kv": "f16",
@@ -264,7 +265,7 @@ def analyze(
     gguf_path: str | Path,
     *,
     profile_path: str | Path | None = "config/device_profile.yaml",
-    ctx: int = 4096,
+    ctx: int = 8192,
     kv: str = "f16",
     params_b: float | None = None,
     budget: float | None = None,
@@ -324,7 +325,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gguf", required=True)
     ap.add_argument("--profile", default="config/device_profile.yaml")
-    ap.add_argument("--ctx", type=int, default=4096)
+    ap.add_argument("--ctx", type=int, default=8192, help="لازم 8192 — ورقة الامتحان v3 ثابتة")
     ap.add_argument("--kv", choices=list(KV_BYTES), default="f16")
     ap.add_argument("--params-b", type=float, default=None)
     ap.add_argument("--budget", type=float, default=None)

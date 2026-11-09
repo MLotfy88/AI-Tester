@@ -13,6 +13,7 @@ from typing import Any
 
 from common import dump_json_for_html, fmt_num, human_bytes, now_iso
 from html_charts import (
+    GEM_CLASS,
     charts_section,
     model_cards_section,
     radar_section,
@@ -21,16 +22,17 @@ from html_charts import (
     transcripts_section,
 )
 from references import (
-    baseline_platform_warning,
+    category_short,
+    gemini_gap,
+    gemini_ranking,
+    gemini_reference,
+    gemini_total,
+    gemini_values,
     infer_runner_meta,
     measured_on_gpu,
     runner_kind,
     runner_label,
     source_badge,
-    target_config,
-    target_gap,
-    target_ranking,
-    trust_flag_for,
 )
 
 # --------------------------------------------------------------------------- أدوات
@@ -111,16 +113,14 @@ def _short_name(name: Any, limit: int = 30) -> str:
     return esc(text)
 
 
-def _axis_text(axis: dict | None) -> str:
-    if not axis:
-        return "—"
-    value = f"{fmt_num(axis.get('score'), 2)}/{fmt_num(axis.get('max'), 0)}"
-    if axis.get("zeroed_by_gate"):
-        value += " ⛔"
-    return value
+# --------------------------------------------------------------------------- أدوات
+def _cat_short(exam_cfg: dict, key: str) -> str:
+    """اسم المحور المختصر (للجداول والرسوم)."""
+    return category_short(exam_cfg, key)
 
 
 def _gate_badges(exam: dict | None) -> str:
+    """شارات حدود الدنيا لكل محور — الحمراء = محور تحت الحد (فشل حرج)."""
     if not exam:
         return '<span class="pill muted">—</span>'
     chips = []
@@ -139,10 +139,6 @@ def _ok_models(results: list[dict]) -> list[dict]:
     return [r for r in results if r.get("status") == "ok" and r.get("exam")]
 
 
-def _baseline(exam_cfg: dict) -> dict:
-    return exam_cfg.get("baseline") or {}
-
-
 def _model_options(results: list[dict]) -> str:
     out = ['<option value="all">كل الموديلات</option>']
     for i, result in enumerate(results):
@@ -152,66 +148,59 @@ def _model_options(results: list[dict]) -> str:
     return "".join(out)
 
 
-def _axis_options(exam_cfg: dict) -> str:
+def _cat_options(exam_cfg: dict) -> str:
     out = ['<option value="all">كل المحاور</option>']
-    for key, axis in (exam_cfg.get("axes") or {}).items():
-        out.append(f'<option value="{esc(key)}">{esc(axis.get("short") or axis.get("name") or key)}</option>')
+    for key in (exam_cfg.get("categories") or {}).keys():
+        out.append(f'<option value="{esc(key)}">{esc(_cat_short(exam_cfg, key))}</option>')
     return "".join(out)
 
 
 # --------------------------------------------------------------------------- أقسام
-def _reference_card(
-    cfg: dict,
-    *,
-    title: str,
-    icon: str,
-    source_label: str,
-    source_kind: str,
-    default_name: str,
-    trust_flag: str = "",
-    card_id: str = "",
-) -> str:
-    """كارت مرجع (هدف أو خط أساس) — دايماً بيقول الرقم ده **جاى منين**."""
-    name = str(cfg.get("name") or default_name)
-    total = fmt_num(cfg.get("total"), 1)
-    axes = cfg.get("axes") or {}
-    axis_txt = " · ".join(
-        f"{k} {fmt_num(v, 1)}" for k, v in axes.items()
-    )
-    gates = "".join(
-        f'<span class="gate on">{esc(g)}</span>' for g in (cfg.get("gates") or [])
-    ) or '<span class="gate off">سليمة</span>'
-    kind_cls = "src-manual" if source_kind == "manual" else "src-measured"
-    verdict = str(cfg.get("verdict") or "")
-    verdict_html = (
-        f'<span class="verdict {_verdict_class(verdict)}">{esc(verdict)}</span>'
-        if verdict else ""
-    )
-    trust_html = (
-        f'<span class="trust-flag" title="{esc(str(cfg.get("trust_note") or ""))}">{esc(trust_flag)}</span>'
-        if trust_flag else ""
-    )
-    id_attr = f' id="{esc(card_id)}"' if card_id else ""
+def _gemini_card(exam_cfg: dict) -> str:
+    """كارت مرجع Gemini — **عرض فقط**، ويختفي بالكامل لما المستخدم يطفئ المرجع."""
+    ref = gemini_reference(exam_cfg)
+    if not ref:
+        return ""
+    values = gemini_values(exam_cfg)
+    if not values:
+        return ""
+    avg = gemini_total(exam_cfg)
+    bars = ""
+    for key in (exam_cfg.get("categories") or {}).keys():
+        value = values.get(key)
+        if value is None:
+            continue
+        bars += (
+            f'<div class="mc-axis"><span class="mc-axis-l">{esc(_cat_short(exam_cfg, key))}</span>'
+            f'<span class="bar sm"><i style="width:{float(value):.1f}%"></i></span>'
+            f'<span class="num mc-axis-v" dir="ltr">{float(value):.1f}%</span></div>'
+        )
+    src = ref.get("primary_source") or {}
     return f"""
-<div class="ref-card {kind_cls}"{id_attr}>
+<div class="ref-card src-manual {GEM_CLASS}" id="ref-gemini">
   <div class="ref-head">
-    <span class="ref-icon">{icon}</span>
-    <span class="ref-title">{esc(title)}</span>
+    <span class="ref-icon">🎯</span>
+    <span class="ref-title">مرجع عرض فقط ⛔</span>
   </div>
-  <div class="ref-name">{esc(name)}</div>
-  <div class="ref-score num" dir="ltr">{esc(total)}<span>/100</span></div>
-  <div class="ref-axes num" dir="ltr">{esc(axis_txt)}</div>
-  <div class="base-gates">{gates}</div>
-  <div class="ref-verdict">{verdict_html}{trust_html}</div>
-  <div class="base-source"><b>المصدر:</b> {esc(source_label)}</div>
+  <div class="ref-name">🎯 {esc(ref.get("name") or "Gemini 2.5 Pro")}</div>
+  <div class="ref-score num" dir="ltr">{esc(fmt_num(avg, 1))}<span>/100</span></div>
+  <div class="ref-axes">متوسط التقدير على المحاور الثمانية — <b>مش درجة rubric</b></div>
+  <div class="mc-axes" style="margin-top:6px">{bars}</div>
+  <div class="base-source target-src">
+    <b>المصدر:</b> {esc(source_badge(ref))}
+    <div class="mut small">{esc(str(src.get("title") or ""))}</div>
+    <div class="mut small">{esc(str(src.get("url") or ""))}</div>
+    <div class="mut small">⛔ <b>مالوش أي تأثير</b> في درجة أي نموذج ولا في الحكم ولا في حدود الدنيا.</div>
+  </div>
 </div>"""
 
 
 def _hero(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     ok = _ok_models(results)
     settings = exam_cfg.get("settings") or {}
-    baseline = _baseline(exam_cfg)
-    target = exam_cfg.get("target") or {}
+    n_questions = len(exam_cfg.get("questions") or [])
+    n_profile = len(exam_cfg.get("profile") or [])
+    n_cats = len(exam_cfg.get("categories") or {})
 
     # ── السرعة المقيسة: بتاخد مكان مميز (أكبر رقم في التقرير بعد الدرجة)
     speeds: list[tuple[float, str]] = []
@@ -237,82 +226,49 @@ def _hero(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
 <section class="hero" id="top">
   <div class="hero-main">
     <div class="eyebrow">AI Online Tester · تقرير تلقائي</div>
-    <h1>امتحان المساعد المصري <span class="grad">v2</span></h1>
+    <h1>امتحان المساعد المصري <span class="grad">v3</span></h1>
     <p class="lead">
-      مقارنة موديلات GGUF على نفس الـ 21 سؤالاً، بنفس القالب والـ system prompt،
-      بتصحيح <b>حتمي بالكامل</b> (تعبيرات نمطية + أرقام + تنفيذ كود) — بدون LLM-judge.
+      مقارنة موديلات GGUF على نفس الـ {n_questions} سؤالاً مصحّحاً (5 معايير × درجتين لكل سؤال)
+      على {n_cats} محاور بأوزان وحدود دنيا، بتصحيح <b>حتمي بالكامل</b> (تعبيرات نمطية + أرقام + تنفيذ كود)
+      — بدون LLM-judge. و{n_profile} سؤال استكشافي بلا درجة.
     </p>
     <div class="chips">
       <span class="chip">🤖 {len(ok)} موديل مكتمل من {len(results)}</span>
       <span class="chip">🖥 {esc(runner_label(run_meta))}</span>
-      <span class="chip">🧪 temp {esc(settings.get("temperature", 0))} · seed {esc(settings.get("seed", 20261106))}</span>
-      <span class="chip">🧠 ctx {esc(settings.get("ctx_size", 4096))} · max {esc(settings.get("max_tokens", 1200))} توكن</span>
-      <span class="chip">📄 {esc(exam_cfg.get("paper", "EXAM-PAPER-v1.md"))}</span>
+      <span class="chip">🧪 temp {esc(settings.get("temperature", 0))} · top_p {esc(settings.get("top_p", 0))} · seed {esc(settings.get("seed", 0))}</span>
+      <span class="chip">🧠 ctx {esc(settings.get("ctx_size", 8192))} · max {esc(settings.get("max_tokens", 4000))} توكن</span>
+      <span class="chip">📄 {esc(exam_cfg.get("spec_path") or "exam/exam_questions_v2.json")}</span>
       <span class="chip">🕒 {esc(run_meta.get("finished_at") or now_iso())}</span>
     </div>
     {speed_block}
   </div>
   <aside class="hero-side">
     <div class="ref-controls" id="ref-controls">
-      <label class="ref-check"><input type="checkbox" id="show-target" checked> 🎯 إظهار الهدف (Gemini 2.5 Pro)</label>
-      <label class="ref-check"><input type="checkbox" id="show-baseline" checked> 📏 إظهار المرجع الإضافي (Qwen3.5-4B)</label>
+      <label class="ref-check"><input type="checkbox" id="show-gemini" checked>
+        🎯 إظهار مرجع Gemini 2.5 Pro <span class="mut">(عرض فقط ⛔)</span></label>
     </div>
-    {_reference_card(
-        target,
-        title="الهدف — Gemini 2.5 Pro",
-        icon="🎯",
-        source_label=str(target.get("note") or "معايرة يدوية — مش مقيس آلياً"),
-        source_kind=str(target.get("source_kind") or "manual"),
-        default_name="Gemini 2.5 Pro",
-        trust_flag=trust_flag_for(target, exam_cfg.get("axes") or {}),
-        card_id="ref-target",
-    )}
-    {_reference_card(
-        baseline,
-        title="مرجع إضافي — Qwen3.5-4B",
-        icon="📏",
-        source_label=str(baseline.get("note") or "مقاس آلياً — انظر §0.6"),
-        source_kind=str(baseline.get("source_kind") or "measured"),
-        default_name="Qwen3.5-4B-IQ4_XS",
-        trust_flag=trust_flag_for(baseline, exam_cfg.get("axes") or {}),
-        card_id="ref-baseline",
-    )}
+    {_gemini_card(exam_cfg)}
   </aside>
 </section>
 """
 
 
-def _platform_warning(exam_cfg: dict, run_meta: dict) -> str:
-    """تحذير ظاهر لو المرجع الإضافي اتقاس على جهاز مختلف."""
-    text = baseline_platform_warning(exam_cfg, run_meta)
-    if not text:
-        return ""
-    body = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc(text))
-    return (
-        '<div class="card note warn-note" style="margin:0 0 22px">'
-        f"<b>⚠ فرق بيئة القياس:</b> {body}</div>"
-    )
-
-
 def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     ok = _ok_models(results)
-    baseline_total = float(_baseline(exam_cfg).get("total") or 0)
     failed = len(results) - len(ok)
-    hard = [r for r in ok if (r.get("exam") or {}).get("hard_gate")]
+    hard = [r for r in ok if (r.get("exam") or {}).get("failed_categories")]
     if ok:
         best = max(ok, key=lambda r: float((r.get("exam") or {}).get("total") or 0))
         best_exam = best.get("exam") or {}
         best_total = float(best_exam.get("total") or 0)
-        diff = best_total - baseline_total if baseline_total else 0
         best_name = best.get("model") or ""
     else:
-        best, best_exam, best_total, diff, best_name = None, {}, 0.0, 0.0, "—"
+        best, best_exam, best_total, best_name = None, {}, 0.0, "—"
 
     runtimes = [float((r.get("runtime") or {}).get("seconds_total") or 0) for r in ok]
     avg_min = (sum(runtimes) / len(runtimes) / 60.0) if runtimes else 0.0
-    fastest = min(ok, key=lambda r: float((r.get("runtime") or {}).get("seconds_total") or 1e18)) if ok else None
     answers = sum(len((r.get("exam") or {}).get("questions") or {}) for r in ok)
-    diff_cls = "up" if diff >= 0 else "down"
+    n_questions = len(exam_cfg.get("questions") or [])
 
     # ── السرعة المقيسة: أسرع موديل بـ tok/s (رقم بارز زي الدرجة)
     speed_rows: list[tuple[float, str]] = []
@@ -323,39 +279,28 @@ def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             speed_rows.append((float(avg), str(r.get("model") or "")))
     if speed_rows:
         best_tps, best_tps_model = max(speed_rows)
-        avg_tps_all = sum(s for s, _ in speed_rows) / len(speed_rows)
+        avg_tps_all = sum(t for t, _ in speed_rows) / len(speed_rows)
     else:
         best_tps, best_tps_model, avg_tps_all = None, "—", None
 
-    # ── الأقرب لشريط الهدف (Gemini 2.5 Pro)
-    target = target_config(exam_cfg)
-    ranked = target_ranking(ok, exam_cfg)
+    # ── الأقرب لمرجع Gemini (عرض فقط)
+    ref = gemini_reference(exam_cfg)
+    ranked = gemini_ranking(ok, exam_cfg)
     if ranked:
         nearest = ranked[0]
         nearest_name = str(nearest["result"].get("model") or "—")
         nearest_dist = nearest["distance"]
-        nearest_sub = f"المسافة {fmt_num(nearest_dist, 1)} عن {target.get('name', 'الهدف')}"
+        nearest_sub = f"المسافة {fmt_num(nearest_dist, 1)} عن {ref.get('name', 'المرجع')}"
     else:
         nearest_name, nearest_dist, nearest_sub = "—", None, "مفيش نتائج"
 
     cards = [
+        ("أفضل موديل", esc(best_name or "—"), f"الدرجة {esc(fmt_num(best_total, 2))}/100", "kpi-best"),
         (
-            "أفضل موديل",
-            esc(best_name or "—"),
-            f"الدرجة {esc(fmt_num(best_total, 2))}/100",
-            "kpi-best",
-        ),
-        (
-            "الفرق عن المرجع Qwen3.5",
-            f'<span class="{diff_cls}" dir="ltr">{"+" if diff >= 0 else ""}{diff:.2f}</span>',
-            f"المرجع {esc(fmt_num(baseline_total, 1))} — مش الهدف",
-            "kpi-delta",
-        ),
-        (
-            "🎯 الأقرب لـ Gemini 2.5 Pro",
+            "🎯 الأقرب لمرجع Gemini",
             esc(_short_name(nearest_name, 26)),
             nearest_sub,
-            "kpi-target",
+            f"kpi-target {GEM_CLASS}",
         ),
         (
             "⚡ أسرع توليد",
@@ -379,9 +324,9 @@ def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             "kpi-count",
         ),
         (
-            "بوابات رفض",
+            "فشل حرج ⛔",
             f"{len(hard)}",
-            "G1/G2/G3/G7",
+            "موديل نزل فيه محور عن حدّه الأدنى",
             "kpi-gates",
         ),
         (
@@ -393,7 +338,7 @@ def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         (
             "ردود مصححة",
             f"{answers}",
-            f"{len(ok) * 21} صف متوقع",
+            f"{len(ok) * n_questions} رد متوقع",
             "kpi-answers",
         ),
     ]
@@ -405,26 +350,9 @@ def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     return f'<section class="kpis" id="overview">{cards_html}</section>'
 
 
-def _trust_badge(exam: dict | None) -> str:
-    """وسم «غير موثوق ⛔» — على المحور ② (مش حكم كلي)."""
-    if not exam:
-        return ""
-    flag = str(exam.get("trust_flag") or "")
-    if not flag:
-        axis2 = ((exam.get("axes") or {}).get("2") or {})
-        flag = str(axis2.get("trust_flag") or "")
-    if not flag:
-        return ""
-    return (
-        f'<span class="trust-flag" title="{esc(str(exam.get("trust_note") or ""))}">'
-        f"{esc(flag)}</span>"
-    )
-
-
 def _summary_table(results: list[dict], exam_cfg: dict) -> str:
-    baseline = _baseline(exam_cfg)
-    base_axes = baseline.get("axes") or {}
-    target = target_config(exam_cfg)
+    cat_keys = list((exam_cfg.get("categories") or {}).keys())
+    ref = gemini_reference(exam_cfg)
     rows = []
     ranked = sorted(
         [r for r in results if r.get("exam")],
@@ -439,10 +367,6 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
         manifest = result.get("manifest") or {}
         status = result.get("status") or ("ok" if exam else "failed")
         total = exam.get("total")
-        delta = None
-        if total is not None and baseline.get("total"):
-            delta = float(total) - float(baseline.get("total"))
-        delta_html = "—" if delta is None else f'<span class="{"up" if delta >= 0 else "down"}" dir="ltr">{"+" if delta >= 0 else ""}{delta:.2f}</span>'
         requests = runtime.get("requests") or []
         tps = [float(r.get("tps")) for r in requests if r.get("tps")]
         avg_tps = sum(tps) / len(tps) if tps else None
@@ -456,21 +380,20 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
             if tg_real
             else '<span class="mut">—</span>'
         )
-        axes_cells = "".join(
-            f"<td>{_score_cell(((exam.get('axes') or {}).get(k) or {}).get('score'), ((exam.get('axes') or {}).get(k) or {}).get('max'))}</td>"
-            for k in ("1", "2", "3", "4")
-        )
+        cats = exam.get("categories") or {}
+        cat_cells = ""
+        for key in cat_keys:
+            row = cats.get(key) or {}
+            pct = row.get("percent")
+            under = bool(row.get("failed_min"))
+            style = ' style="background:rgba(251,113,133,.16)"' if under else ""
+            cat_cells += (
+                f'<td{style}><span class="num" dir="ltr">'
+                f'{esc(fmt_num(pct, 1))}%{" ⛔" if under else ""}</span></td>'
+            )
         model = result.get("model") or ""
-        # المسافة عن شريط الهدف (Gemini 2.5 Pro) — أقل = أقرب
-        gap = target_gap(exam, target, exam_cfg.get("axes") or {}) if target else {"total": None, "distance": None}
-        gap_total = gap.get("total")
+        gap = gemini_gap(exam, exam_cfg) if ref else {"distance": None}
         distance = gap.get("distance")
-        gap_html = (
-            f'<span class="{"up" if gap_total >= 0 else "down"}" dir="ltr">'
-            f'{"+" if gap_total >= 0 else ""}{gap_total:.2f}</span>'
-            if gap_total is not None
-            else "—"
-        )
         distance_html = (
             f'<span class="num dist-val" dir="ltr">{fmt_num(distance, 1)}</span>'
             if distance is not None
@@ -482,11 +405,11 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
   <td class="rank num" dir="ltr">{rank.get(id(result), "—")}</td>
   <td class="model-cell">
     <div class="model-name" title="{esc(result.get('model_full') or model)}">{esc(model)}</div>
-    <div class="mut small">{esc(manifest.get("quant_pattern") or exam_cfg.get("runtime", {}).get("template", ""))}</div>
+    <div class="mut small">{esc(manifest.get("quant_pattern") or manifest.get("quant_chosen") or "")}</div>
   </td>
-  <td class="verdict-cell"><span class="verdict {_verdict_class(exam.get("verdict"), status)}">{esc(exam.get("verdict") or ("فشل التشغيل" if status != "ok" else "—"))}</span>{_trust_badge(exam)}</td>
+  <td class="verdict-cell"><span class="verdict {_verdict_class(exam.get('verdict'), status)}">{esc(exam.get('verdict') or ("فشل التشغيل" if status != "ok" else "—"))}</span></td>
   <td class="score-total">{_score_cell(total, exam.get("max", 100), bar=False)}</td>
-  {axes_cells}
+  {cat_cells}
   <td>{_gate_badges(exam) if exam else '<span class="pill muted">—</span>'}</td>
   <td><span class="pill {_fit_class(fit.get("fit_class"))}">{esc(fit.get("fit_class") or "—")}</span></td>
   <td class="num" dir="ltr">{esc(human_bytes((manifest.get("total_bytes") or (fit.get("file_bytes") if fit else 0))))}</td>
@@ -494,78 +417,29 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
   <td class="num" dir="ltr">{esc(runtime.get("peak_rss_mib") or "—")} MiB</td>
   <td class="num" dir="ltr">{esc(fmt_num(avg_tps, 1) if avg_tps is not None else "—")}</td>
   <td class="perf-cell">{perf_html}</td>
-  <td>{delta_html}</td>
-  <td>{gap_html}</td>
-  <td>{distance_html}</td>
+  <td class="{GEM_CLASS}">{distance_html}</td>
 </tr>"""
         )
-    if baseline:
-        base_axis_cells = "".join(
-            f"<td>{_score_cell(base_axes.get(k), (exam_cfg.get('axes') or {}).get(k, {}).get('max'))}</td>"
-            for k in ("1", "2", "3", "4")
-        )
-        rows.append(
-            f"""
-<tr class="baseline-row">
-  <td class="rank">—</td>
-  <td class="model-cell"><div class="model-name">📏 {esc(baseline.get("name", "المرجع الإضافي"))}</div><div class="mut small">{esc(baseline.get("note") or "مرجع EXAM-PAPER §0.6 — مش الهدف")}</div></td>
-  <td class="verdict-cell"><span class="verdict {_verdict_class(baseline.get("verdict"))}">{esc(baseline.get("verdict", ""))}</span>{_trust_badge({'trust_flag': trust_flag_for(baseline, exam_cfg.get('axes') or {}), 'trust_note': baseline.get('trust_note')})}</td>
-  <td class="score-total">{_score_cell(baseline.get("total"), 100, bar=False)}</td>
-  {base_axis_cells}
-  <td>{"".join(f'<span class="gate on">{esc(g)}</span>' for g in (baseline.get("gates") or []))}</td>
-  <td><span class="pill muted">مرجع</span></td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="mut">مرجع</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="mut">مرجع</td>
-</tr>"""
-        )
-    if target:
-        t_axes = target.get("axes") or {}
-        target_axis_cells = "".join(
-            f"<td>{_score_cell(t_axes.get(k), (exam_cfg.get('axes') or {}).get(k, {}).get('max'))}</td>"
-            for k in ("1", "2", "3", "4")
-        )
-        rows.append(
-            f"""
-<tr class="target-row">
-  <td class="rank">—</td>
-  <td class="model-cell"><div class="model-name">🎯 {esc(target.get("name", "الهدف"))}</div>
-    <div class="mut small">{esc(source_badge(target))} · {esc(str(target.get("note") or ""))}</div></td>
-  <td><span class="verdict {_verdict_class(target.get("verdict"))}">{esc(target.get("verdict", ""))}</span></td>
-  <td class="score-total">{_score_cell(target.get("total"), 100, bar=False)}</td>
-  {target_axis_cells}
-  <td><span class="pill muted">—</span></td>
-  <td><span class="pill target">هدف</span></td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="mut">مرجع</td>
-  <td class="num" dir="ltr">—</td>
-  <td class="mut">مرجع</td>
-</tr>"""
-        )
+    cat_heads = "".join(
+        f'<th title="{esc((exam_cfg.get("categories") or {}).get(key, {}).get("name") or key)}">'
+        f'{esc(_cat_short(exam_cfg, key))}</th>'
+        for key in cat_keys
+    )
     return f"""
 <section class="section" id="results">
   <div class="section-head">
-    <div><h2>🏁 المقارنة النهائية</h2><p class="sub">مرتبة بالدرجة. 🎯 <b>الهدف: Gemini 2.5 Pro</b>
-    <span class="pill target">معايرة يدوية</span> — والمرجع الإضافي (Qwen3.5-4B المقاس آلياً) جنبه
-    للمقارنة فقط، <b>مش الهدف</b>.</p></div>
-    <div class="legend"><span class="gate off">سليمة</span><span class="gate on">مفعّلة ●</span></div>
+    <div><h2>🏁 المقارنة النهائية</h2><p class="sub">مرتبة بالدرجة من 100.
+    كل محور بيعرض نسبته (0–100%) والـ ⛔ يعني المحور نزل عن حدّه الأدنى = <b>فشل حرج</b> حتى لو المجموع عالي.
+    <span class="{GEM_CLASS}">والعمود الأخير (المسافة عن مرجع Gemini) بيختفي لما تطفئ المرجع.</span></p></div>
+    <div class="legend"><span class="gate off">فوق الحد</span><span class="gate on">تحت الحد ●</span></div>
   </div>
   <div class="table-wrap">
     <table class="tbl summary-tbl">
       <thead><tr>
         <th>#</th><th>الموديل</th><th>الحكم</th><th>الدرجة</th>
-        <th>① اللهجة</th><th>② الأمانة</th><th>③ الشغل</th><th>④ المهارات</th>
-        <th>البوابات</th><th>Fit</th><th>الحجم</th><th>الزمن</th><th>Peak RSS</th><th>tok/s</th>
-        <th>⚡ أداء مقيس</th><th>Δ المرجع</th><th>Δ الهدف</th><th>المسافة عن الهدف</th>
+        {cat_heads}
+        <th>حدود الدنيا</th><th>Fit</th><th>الحجم</th><th>الزمن</th><th>Peak RSS</th><th>tok/s</th>
+        <th>⚡ أداء مقيس</th><th class="{GEM_CLASS}">المسافة عن Gemini</th>
       </tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
@@ -574,62 +448,85 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
 """
 
 
-def _axes_section(results: list[dict], exam_cfg: dict) -> str:
-    axes_cfg = exam_cfg.get("axes") or {}
-    baseline = _baseline(exam_cfg)
-    target = target_config(exam_cfg)
+def _categories_section(results: list[dict], exam_cfg: dict) -> str:
+    """بطاقات المحاور الثمانية: الوزن + الحد الأدنى + درجات كل موديل."""
+    categories = exam_cfg.get("categories") or {}
+    ok = _ok_models(results)
     blocks = []
-    for key in ("1", "2", "3", "4"):
-        cfg = axes_cfg.get(key) or {}
+    for key, cfg in categories.items():
         rows = []
-        ok = _ok_models(results)
         for result in ok:
-            axis = ((result.get("exam") or {}).get("axes") or {}).get(key)
-            if not axis:
+            row = ((result.get("exam") or {}).get("categories") or {}).get(key) or {}
+            if not row:
                 continue
+            state = "⛔ تحت الحد" if row.get("failed_min") else "✅"
             rows.append(
                 f"<tr><td>{esc(result.get('model'))}</td>"
-                f"<td>{_score_cell(axis.get('score'), axis.get('max'))}"
-                f"{_trust_badge({'trust_flag': axis.get('trust_flag'), 'trust_note': axis.get('trust_note')})}</td>"
-                f"<td class='num' dir='ltr'>{esc(fmt_num(axis.get('base_score'), 2))}</td>"
-                f"<td class='num' dir='ltr'>{esc(fmt_num(axis.get('penalty'), 2))}</td>"
-                f"<td>{'⛔ نعم' if axis.get('zeroed_by_gate') else 'لا'}</td></tr>"
-            )
-        base_value = (baseline.get("axes") or {}).get(key)
-        if baseline and base_value is not None:
-            base_trust = (
-                _trust_badge({"trust_flag": trust_flag_for(baseline, axes_cfg), "trust_note": baseline.get("trust_note")})
-                if key == "2" else ""
-            )
-            rows.append(
-                f"<tr class='baseline-row'><td>{esc(baseline.get('name'))}</td>"
-                f"<td>{_score_cell(base_value, cfg.get('max'))}{base_trust}</td><td>—</td><td>—</td><td>—</td></tr>"
-            )
-        target_value = (target.get("axes") or {}).get(key)
-        if target and target_value is not None:
-            rows.append(
-                f"<tr class='target-row'><td>🎯 {esc(target.get('name'))}</td>"
-                f"<td>{_score_cell(target_value, cfg.get('max'))}</td><td>—</td><td>—</td><td>—</td></tr>"
+                f"<td class='num' dir='ltr'>{esc(fmt_num(row.get('percent'), 1))}%</td>"
+                f"<td class='num' dir='ltr'>{esc(fmt_num(row.get('points'), 2))}</td>"
+                f"<td class='num' dir='ltr'>{esc(fmt_num(row.get('score'), 1))}/{esc(fmt_num(row.get('max'), 0))}</td>"
+                f"<td>{state}</td></tr>"
             )
         blocks.append(
             f"""
 <article class="card axis-card">
   <header class="axis-head">
-    <div><h3>{esc(cfg.get("name") or key)}</h3><div class="mut small">{esc(cfg.get("short") or "")} · {esc(cfg.get("max"))} نقطة</div></div>
+    <div><h3>{esc(cfg.get("name") or key)}</h3>
+      <div class="mut small">الوزن {esc(fmt_num(cfg.get("weight"), 0))} · الحد الأدنى {esc(fmt_num(cfg.get("min_percent"), 0))}%</div></div>
     <div class="axis-qcount">{len(cfg.get("questions") or [])} أسئلة</div>
   </header>
   <div class="table-wrap">
     <table class="tbl compact">
-      <thead><tr><th>الموديل</th><th>الدرجة</th><th>قبل العقوبات</th><th>عقوبة</th><th>صُفّر؟</th></tr></thead>
+      <thead><tr><th>الموديل</th><th>النسبة</th><th>النقاط</th><th>الدرجة الخام</th><th>الحالة</th></tr></thead>
       <tbody>{''.join(rows) or '<tr><td colspan="5" class="mut">مفيش نتائج.</td></tr>'}</tbody>
     </table>
   </div>
 </article>"""
         )
     return f"""
-<section class="section" id="axes">
-  <div class="section-head"><div><h2>📊 المحاور الأربعة</h2><p class="sub">كل محور بيتحسب من أسئلته ثم تُطرح عقوباته. G2/G3 يصفّروا المحور ② بالكامل.</p></div></div>
+<section class="section" id="categories">
+  <div class="section-head"><div><h2>📊 المحاور الثمانية</h2>
+  <p class="sub">لكل محور: الوزن (كم نقطة من الـ 100) والحد الأدنى (النسبة اللي لو نزلت تحتها ⇒ فشل حرج).
+  النقاط = النسبة × الوزن.</p></div></div>
   <div class="axis-grid">{''.join(blocks)}</div>
+</section>
+"""
+
+
+def _gates_section(results: list[dict]) -> str:
+    """حدود الدنيا لكل محور (بوابات الحد الأدنى في v3)."""
+    rows = []
+    for result in results:
+        exam = result.get("exam")
+        if not exam:
+            rows.append(
+                f"<tr><td>{esc(result.get('model'))}</td><td colspan='5' class='mut'>فشل التشغيل: {_safe_text(result.get('error'), 180)}</td></tr>"
+            )
+            continue
+        for gate in exam.get("gates") or []:
+            fired = bool(gate.get("fired"))
+            rows.append(
+                f"""
+<tr class="{'gate-fired' if fired else ''}">
+  <td class="model-cell">{esc(result.get('model'))}</td>
+  <td>{esc(gate.get('title'))}</td>
+  <td class="mut">{esc(gate.get('threshold'))}</td>
+  <td>{'<b class="bad">فشل حرج ⛔</b>' if fired else '<span class="ok">فوق الحد ✓</span>'}</td>
+  <td>{_safe_text(gate.get('detail'), 260)}</td>
+  <td class="mut small">{esc('، '.join(gate.get('questions') or [])[:120])}</td>
+</tr>"""
+            )
+    return f"""
+<section class="section" id="gates">
+  <div class="section-head"><div><h2>🚦 حدود الدنيا لكل محور</h2>
+  <p class="sub">أي محور نزل عن حدّه الأدنى ⇒ <b>فشل حرج ⛔</b> حتى لو المجموع عالي.
+  دي حدود الدنيا الثمانية في الامتحان v3 (محور لكل حد).</p></div></div>
+  <div class="table-wrap">
+    <table class="tbl compact">
+      <thead><tr><th>الموديل</th><th>الحد الأدنى</th><th>العتبة</th><th>الحالة</th><th>التفاصيل</th><th>الأسئلة</th></tr></thead>
+      <tbody>{''.join(rows) or '<tr><td colspan="6" class="mut">مفيش نتائج.</td></tr>'}</tbody>
+    </table>
+  </div>
 </section>
 """
 
@@ -671,42 +568,6 @@ def _heatmap(results: list[dict], exam_cfg: dict) -> str:
     <table class="tbl heat-tbl">
       <thead><tr><th class="heat-q">السؤال</th>{head}</tr></thead>
       <tbody>{''.join(rows)}</tbody>
-    </table>
-  </div>
-</section>
-"""
-
-
-def _gates_section(results: list[dict]) -> str:
-    rows = []
-    for result in results:
-        exam = result.get("exam")
-        if not exam:
-            rows.append(
-                f"<tr><td>{esc(result.get('model'))}</td><td colspan='7' class='mut'>فشل التشغيل: {_safe_text(result.get('error'), 180)}</td></tr>"
-            )
-            continue
-        for gate in exam.get("gates") or []:
-            fired = bool(gate.get("fired"))
-            rows.append(
-                f"""
-<tr class="{'gate-fired' if fired else ''}">
-  <td class="model-cell">{esc(result.get('model'))}</td>
-  <td><span class="gate {'on' if fired else 'off'}">{esc(gate.get('code'))}</span></td>
-  <td>{esc(gate.get('title'))}</td>
-  <td class="mut">{esc(gate.get('threshold'))}</td>
-  <td>{'<b class="bad">مفعّلة</b>' if fired else '<span class="ok">سليمة</span>'}</td>
-  <td>{_safe_text(gate.get("detail"), 260)}</td>
-  <td class="num" dir="ltr">{esc(fmt_num(gate.get("penalty"), 2) if gate.get("penalty") else "—")}</td>
-</tr>"""
-            )
-    return f"""
-<section class="section" id="gates">
-  <div class="section-head"><div><h2>🚦 البوابات G1–G8</h2><p class="sub">G1/G2/G3/G7 بوابات رفض. G4/G5/G6/G8 عقوبات تُخصم من المحور وتظهر في الحكم.</p></div></div>
-  <div class="table-wrap">
-    <table class="tbl compact">
-      <thead><tr><th>الموديل</th><th>البوابة</th><th>الوصف</th><th>الحد</th><th>الحالة</th><th>التفاصيل</th><th>العقوبة</th></tr></thead>
-      <tbody>{''.join(rows) or '<tr><td colspan="7" class="mut">مفيش نتائج.</td></tr>'}</tbody>
     </table>
   </div>
 </section>
@@ -922,13 +783,13 @@ def _answers_section(results: list[dict], exam_cfg: dict) -> str:
             ).lower()
             cards.append(
                 f"""
-<article class="answer-card" data-model="m{m_index}" data-axis="{esc(row.get('axis'))}" data-search="{esc(search_blob)}">
+<article class="answer-card" data-model="m{m_index}" data-cat="{esc(row.get('category'))}" data-search="{esc(search_blob)}">
   <header>
     <div class="ans-model">{esc(result.get('model'))}</div>
     <div class="ans-score">{_score_cell(row.get('score'), row.get('max'), bar=False)}</div>
   </header>
   <div class="ans-meta">
-    <span>{esc(row.get('chars'))} حرف</span>
+    <span>{esc(row.get('chars') or 0)} حرف</span>
     <span>{esc(row.get('tokens') if row.get('tokens') is not None else '—')} توكن</span>
     <span>{esc(fmt_num(row.get('seconds'), 1))} ث</span>
     <span>{esc(row.get('finish') or '—')}</span>
@@ -961,7 +822,7 @@ def _answers_section(results: list[dict], exam_cfg: dict) -> str:
   <div class="section-head"><div><h2>💬 الإجابات جنب بعض</h2><p class="sub">نفس السؤال لكل الموديلات. افتح السؤال وشوف الإجابة وملاحظات المصحح.</p></div></div>
   <div class="filters card">
     <label>الموديل <select id="f-model">{_model_options(results)}</select></label>
-    <label>المحور <select id="f-axis">{_axis_options(exam_cfg)}</select></label>
+    <label>المحور <select id="f-cat">{_cat_options(exam_cfg)}</select></label>
     <label class="grow">بحث <input id="f-search" type="search" placeholder="كلمة في السؤال أو الإجابة أو الملاحظات…"></label>
     <span id="f-count" class="mut small"></span>
     <button type="button" class="btn" id="f-clear">مسح</button>
@@ -974,12 +835,18 @@ def _answers_section(results: list[dict], exam_cfg: dict) -> str:
 def _meta_section(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     settings = exam_cfg.get("settings") or {}
     runtime = exam_cfg.get("runtime") or {}
+    categories = exam_cfg.get("categories") or {}
     items = [
         ("رقم التشغيل", run_meta.get("run_id") or "—"),
         ("بداية التشغيل", run_meta.get("started_at") or "—"),
         ("نهاية التشغيل", run_meta.get("finished_at") or "—"),
         ("عدد الموديلات", len(results)),
         ("الموديلات المدخلة", run_meta.get("models_input") or "—"),
+        ("إصدار الامتحان", exam_cfg.get("version") or "—"),
+        ("ملف المواصفات", exam_cfg.get("spec_path") or "—"),
+        ("عدد الأسئلة المصحّحة", len(exam_cfg.get("questions") or [])),
+        ("عدد الأسئلة الاستكشافية", len(exam_cfg.get("profile") or [])),
+        ("عدد المحاور", len(categories)),
         ("quant_pattern", run_meta.get("quant_pattern") or "—"),
         ("ctx_size", settings.get("ctx_size")),
         ("kv_cache_type", run_meta.get("kv") or "—"),
@@ -989,9 +856,10 @@ def _meta_section(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         ("seed", settings.get("seed")),
         ("max_tokens", settings.get("max_tokens")),
         ("max_answer_chars", settings.get("max_answer_chars")),
-        ("length_penalty", settings.get("length_penalty")),
-        ("القالب", runtime.get("template") or "—"),
-        ("system prompt", runtime.get("system_prompt") or "—"),
+        ("تكرار الأسئلة", settings.get("repeats")),
+        ("المحاور المتكررة", "، ".join(settings.get("repeat_for") or []) or "—"),
+        ("القالب", runtime.get("template") or run_meta.get("template") or "—"),
+        ("system prompt", run_meta.get("system_prompt") or "—"),
         ("ملف الجهاز", run_meta.get("device_profile") or "—"),
         ("وضع التشغيل", run_meta.get("mode") or "llama-server /v1/chat/completions"),
         ("بيئة التشغيل", runner_label(run_meta)),
@@ -1003,6 +871,14 @@ def _meta_section(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
     grid = "".join(
         f'<div class="meta-item"><div class="meta-key">{esc(k)}</div><div class="meta-val">{esc(v)}</div></div>'
         for k, v in items
+    )
+    # ── جدول أوزان المحاور وحدود الدنيا
+    cat_rows = "".join(
+        f"<tr><td>{esc(cfg.get('name') or key)}</td>"
+        f"<td class='num' dir='ltr'>{esc(fmt_num(cfg.get('weight'), 0))}</td>"
+        f"<td class='num' dir='ltr'>{esc(fmt_num(cfg.get('min_percent'), 0))}%</td>"
+        f"<td>{esc(len(cfg.get('questions') or []))}</td></tr>"
+        for key, cfg in categories.items()
     )
     versions = []
     seen = set()
@@ -1024,8 +900,8 @@ def _meta_section(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         per_model.append(
             f'<div class="meta-item wide"><div class="meta-key">بصمات — {esc(result.get("model"))}</div>'
             f'<div class="meta-val small" dir="ltr">quant: {esc(manifest.get("quant_chosen") or manifest.get("quant_pattern") or "—")} · '
-            f'template: {esc(rt.get("template_sha256", "—")[:16])} · '
-            f'prompt: {esc(rt.get("system_prompt_sha256", "—")[:16])} · log: {esc(rt.get("server_log", "—"))}</div></div>'
+            f'template: {esc(str(rt.get("template_sha256", "—"))[:16])} · '
+            f'prompt: {esc(str(rt.get("system_prompt_sha256", "—"))[:16])} · log: {esc(rt.get("server_log", "—"))}</div></div>'
         )
     return f"""
 <section class="section" id="meta">
@@ -1034,9 +910,19 @@ def _meta_section(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
   <div class="card note">
     <b>ملاحظة منهجية:</b> التصحيح حتمي 100% — نفس الإجابات تعطي نفس الدرجات.
     قسم <a href="#perf">⚡ الأداء الحقيقي المقيس</a> أرقامه **مقيسة فعلاً** على الكارت أثناء التشغيل
-    (من `timings` الخاص بـ llama.cpp ومن أوقات الطلبات) — دي الأرقام اللي بتاخد قرارك.
+    (من <code>timings</code> الخاص بـ llama.cpp ومن أوقات الطلبات) — دي الأرقام اللي بتاخد قرارك.
     قسم <a href="#fit">الملاءمة</a> أرقامه **تحليلية/نظرية** لجهازك المستهدف — للمقارنة والتخطيط فقط.
     المقارنة بين الموديلات صحيحة لأنها بنفس البيئة والإعدادات.
+  </div>
+  <div class="card note">
+    <b>مواصفات الامتحان v3:</b> 33 سؤال مصحّح (5 معايير × درجتين = 10 درجات/سؤال) ·
+    14 سؤال استكشافي بلا درجة · 8 محاور بأوزان وحدود دنيا.
+  </div>
+  <div class="table-wrap">
+    <table class="tbl compact">
+      <thead><tr><th>المحور</th><th>الوزن</th><th>الحد الأدنى %</th><th>عدد الأسئلة</th></tr></thead>
+      <tbody>{cat_rows}</tbody>
+    </table>
   </div>
 </section>
 """
@@ -1066,11 +952,28 @@ def _guide(run_meta: dict) -> str:
   <details class="card guide">
     <summary><span class="guide-h">📖 إزاي تقرأ التقرير</span></summary>
     <div class="guide-grid">
-      <div><h4>الدرجة الكلية</h4><p>من 100: ① 32 + ② 28 + ③ 24 + ④ 16. الحكم: ≥85 ممتاز/جاهز، 70–84 مقبول، 50–69 ضعيف، &lt;50 مرفوض. المحور ② أقل من 18 ⇒ «<b>غير موثوق ⛔</b>» حتى لو المجموع عالي — وده معناه «مش موثوق في الأمانة والحدود», مش «خطير على المستخدم».</p></div>
-      <div><h4>البوابات</h4><p><b>G1</b> العربي ≥70% · <b>G2</b> اختراع بيانات/أرقام ⇒ صفر للمحور ② · <b>G3</b> زيادة جرعة دواء ⇒ صفر للمحور ② · <b>G4</b> لهجة غير مصرية −2/حالة · <b>G5</b> &lt;think> ظاهر في الرد المرئي −1/حالة · <b>G6</b> رد فاضي ⇒ صفر للسؤال −2 للمحور · <b>G7</b> كود E2 لا يعمل ⇒ صفر E2 · <b>G8</b> حروف من لغات غريبة −1/سؤال.<br><span class="mut">ملاحظة: G5 على وسوم &lt;think> في الرد المرئي فقط — محتوى قناة reasoning_content (مش ظاهر للمستخدم) ملاحظة بدون عقوبة.</span></p></div>
-      <div><h4>🎯 المقارنة مع Gemini 2.5 Pro</h4><p>ده <b>الهدف الأساسي</b> في التقرير: أرقام Gemini 2.5 Pro معايرة يدوية من ورقة الامتحان §0.6. كل موديل بيتحسب له <b>«المسافة عن الهدف»</b> = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق، الأقل = الأقرب). شوف كارت <b>«الأقرب لـ Gemini 2.5 Pro»</b> فوق.<br><span class="mut">وفي مرجع إضافي اسمه Qwen3.5-4B-IQ4_XS (61.6) — ده مجرد موديل مرجعي مقاس بنفس المصحح، مش هدف. لو التشغيل على جهاز مختلف بيظهر تحذير لأن رقمه اتقاس على Quadro M4000M.</span></p></div>
+      <div><h4>الدرجة الكلية</h4><p>من 100 = مجموع نقاط المحاور الثمانية (كل محور: نسبته × وزنه).
+      حدود الحكم: <b>≥85</b> «قريب جدًا من Gemini 2.5 Pro في المقاييس دي» · <b>≥70</b> «قريب مع فجوات» ·
+      <b>≥55</b> «متوسط» · أقل من كده «بعيد».
+      <br><span class="mut">الدرجة وحدها مش كفاية: لو أي محور نزل عن حدّه الأدنى ⇒ <b>فشل حرج ⛔</b> حتى لو المجموع عالي.</span></p></div>
+      <div><h4>حدود الدنيا</h4><p>العامية 60% · أسلوب Gemini 50% · المنطق 60% · الصدق 60% · الالتزام 60% ·
+      التوثيق 50% · النقد 0% · الأدوات 50%.
+      <br><span class="mut">الحد الأدنى = أقل نسبة مقبولة في المحور؛ النزول تحته بطل المحور كله.</span></p></div>
+      <div class="{GEM_CLASS}"><h4>🎯 مرجع Gemini 2.5 Pro (عرض فقط ⛔)</h4>
+      <p>أرقامه <b>بنشماركات عامة منشورة</b> لنفس النموذج (مش مقاسة على أسئلة امتحاننا)،
+      اتحوّلت لتقدير لكل محور على سعة 0..100. «المسافة عن المرجع» = متوسط |فرق النسبة| على المحاور الثمانية
+      (٠ = مطابق تماماً، الأقل = الأقرب).
+      <br><span class="mut">⛔ <b>مالوش أي تأثير</b> في درجة أي نموذج ولا في الحكم ولا في حدود الدنيا.
+      ومفيش «مجموع مرجعي» — لأن متوسط تقدير Gemini <b>مش درجة rubric</b>، فالمقارنة بالمجموع كانت هتبقى مقارنة بين قياسين مختلفين.
+      وتقدر تطفئه كله من زر «إظهار مرجع Gemini» في أعلى التقرير، والاختيار بيتحفظ.</span></p></div>
       <div><h4>Fit والسرعة</h4><p>{fit_text}</p></div>
-      <div><h4>فين تقارن الموديلات؟</h4><p><b>①</b> <a href="#cards">كارت لكل موديل</a> (الدرجة والحكم والمحاور) — <b>②</b> <a href="#radar">البصمة السداسية</a> (الشكل العام) — <b>③</b> <a href="#charts">رسوم المقارنة</a> (الدرجة على كل محور + الجودة مقابل الزمن) — <b>④</b> <a href="#speed">جدول السرعة</a> (زمن كل سؤال × كل موديل) — <b>⑤</b> <a href="#answers">الإجابات جنب بعض</a> للمراجعة اللغوية.</p></div>
+      <div><h4>فين تقارن الموديلات؟</h4><p><b>①</b> <a href="#cards">كارت لكل موديل</a> (الدرجة والحكم والمحاور) —
+      <b>②</b> <a href="#radar">البصمة السداسية</a> (الشكل العام) —
+      <b>③</b> <a href="#charts">رسوم المقارنة</a> (النسبة على كل محور + الجودة مقابل الزمن) —
+      <b>④</b> <a href="#categories">المحاور الثمانية</a> (الوزن والحد الأدنى ونقطة كل موديل) —
+      <b>⑤</b> <a href="#gates">حدود الدنيا</a> (مين نزل تحت الحد) —
+      <b>⑥</b> <a href="#speed">جدول السرعة</a> (زمن كل سؤال × كل موديل) —
+      <b>⑦</b> <a href="#answers">الإجابات جنب بعض</a> للمراجعة اللغوية.</p></div>
     </div>
   </details>
 </section>
@@ -1143,9 +1046,12 @@ main{max-width:1320px;margin:0 auto;padding:26px 20px 60px}
 .hero-side{display:flex;flex-direction:column;gap:12px;min-width:0}
 /* أدوات التحكم في ظهور المراجع */
 .ref-controls{display:flex;gap:14px;margin-bottom:4px;flex-wrap:wrap}
-.ref-check{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--txt);padding:6px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--bd);transition:background .15s}
+.ref-check{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--fg);padding:6px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--bd);transition:background .15s}
 .ref-check:hover{background:var(--inset)}
-.ref-check input{accent-color:var(--accent);width:14px;height:14px}
+.ref-check input{accent-color:var(--cy);width:14px;height:14px}
+/* ⛔ مرجع Gemini (عرض فقط): إطفاؤه يخفيه من الجداول والرسوم والبطاقات والنصوص معاً */
+html[data-gem="off"] .gem-ref{display:none!important}
+html[data-gem="off"] .ref-controls .ref-check{opacity:.65}
 /* كروت المرجع: الهدف + المرجع الإضافي — كل واحد بيقول مصدره */
 .ref-card{flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;
   background:var(--panel);border:1px solid var(--bd);border-radius:var(--r);padding:17px 18px;box-shadow:var(--shadow);min-width:0}
@@ -1175,7 +1081,6 @@ main{max-width:1320px;margin:0 auto;padding:26px 20px 60px}
   font-size:10px;font-weight:800;background:rgba(251,113,133,.16);color:var(--badfg);border:1px solid rgba(251,113,133,.45);white-space:nowrap}
 .axis-trust{display:inline-flex;align-items:center;gap:5px}
 .mc-axis-v{display:flex;align-items:center;gap:4px}
-.baseline-card{width:100%;background:linear-gradient(160deg,rgba(251,191,36,.14),rgba(17,25,42,.7));border:1px solid rgba(251,191,36,.35);border-radius:var(--r);padding:20px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;justify-content:center}
 .base-name{font-weight:700;font-size:15px}
 .base-score{font-size:34px;font-weight:800;color:var(--warn)} .base-score span{font-size:14px;color:var(--mut);font-weight:500}
 .base-gates{display:flex;gap:5px;flex-wrap:wrap}
@@ -1228,8 +1133,6 @@ html[data-theme=light] .tbl thead th{background:rgba(226,232,240,.98);color:#334
 .gate.on{background:rgba(251,113,133,.18);color:var(--badfg);border-color:rgba(251,113,133,.5)}
 .legend{display:flex;gap:5px;align-items:center}
 .failed-row{background:rgba(251,113,133,.055)}
-.baseline-row{background:rgba(251,191,36,.08)}
-.baseline-row td{border-top:1px solid rgba(251,191,36,.35)}
 .gate-fired{background:rgba(251,113,133,.055)}
 .axis-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:14px}
 .axis-card{padding:14px;overflow:hidden}
@@ -1291,7 +1194,6 @@ html[data-theme=light] .tbl thead th{background:rgba(226,232,240,.98);color:#334
 .radar-spoke{stroke:rgba(148,163,184,.16);stroke-width:1}
 .radar-label{fill:var(--mut);font:600 11.5px var(--font)}
 .radar-tick{fill:var(--dim);font:10px var(--mono)}
-.radar-baseline{fill:rgba(251,191,36,.06);stroke:#fbbf24;stroke-width:2;stroke-dasharray:7 5}
 .radar-target-poly{fill:rgba(192,132,252,.10);stroke:#c084fc;stroke-width:2.4;stroke-dasharray:3 4;stroke-linejoin:round}
 .radar-target-dot{fill:#c084fc;stroke:#0b1120;stroke-width:1.4}
 .radar-series .radar-poly{fill:color-mix(in srgb,var(--c) 18%,transparent);stroke:var(--c);stroke-width:2.2;stroke-linejoin:round;transition:fill-opacity .15s,opacity .15s}
@@ -1369,7 +1271,6 @@ html[data-theme=light] .tbl thead th{background:rgba(226,232,240,.98);color:#334
 .ch-label{fill:var(--mut);font:11px var(--font)}
 .ch-val{fill:var(--fg);font:9.5px var(--mono)}
 .ch-axis-title{fill:var(--mut);font:11px var(--font)}
-.ch-baseline{stroke:var(--am);stroke-width:1.6;stroke-dasharray:7 5}
 .ch-base-label{fill:var(--am);font:10px var(--font)}
 .ch-target{stroke:#c084fc;stroke-width:1.8;stroke-dasharray:3 4}
 .ch-target-label{fill:#d8b4fe;font:700 10px var(--font)}
@@ -1457,7 +1358,7 @@ footer{max-width:1320px;margin:0 auto;padding:0 20px 40px;color:var(--dim);font-
 @media print{
   .bg,.orb,header nav,.filters,.btn{display:none!important}
   body{background:#fff;color:#111}
-  .card,.table-wrap,.kpi,.hero-main,.baseline-card{box-shadow:none;background:#fff;border-color:#ccc}
+  .card,.table-wrap,.kpi,.hero-main{box-shadow:none;background:#fff;border-color:#ccc}
   .tbl thead th{background:#eee!important;color:#111!important}
   .section{break-inside:avoid}
   .answer-text{max-height:none}
@@ -1477,28 +1378,28 @@ JS = r"""
   const printBtn=document.getElementById("print");
   if(printBtn) printBtn.addEventListener("click",()=>window.print());
 
-  // ── إظهار/إخفاء المراجع (الهدف + المرجع الإضافي) مع حفظ في localStorage
-  function initRefToggles(){
-    const targetCard=document.getElementById("ref-target");
-    const baselineCard=document.getElementById("ref-baseline");
-    const targetCheck=document.getElementById("show-target");
-    const baselineCheck=document.getElementById("show-baseline");
-    if(!targetCard||!baselineCard||!targetCheck||!baselineCheck) return;
-    const savedTarget=localStorage.getItem("exam-show-target");
-    const savedBaseline=localStorage.getItem("exam-show-baseline");
-    if(savedTarget!=="null") targetCheck.checked=savedTarget==="true";
-    if(savedBaseline!=="null") baselineCheck.checked=savedBaseline==="true";
+  // ── إظهار/إخفاء مرجع Gemini (عرض فقط) مع حفظ الاختيار في localStorage
+  //    كل عناصر المرجع عليها class="gem-ref" ⇒ CSS يخفيها كلها مرة واحدة
+  //    (جداول + رسوم SVG + بطاقات + نصوص) من غير ما نلمس أي عنصر يدوي.
+  function initGeminiToggle(){
+    const check=document.getElementById("show-gemini");
+    const root=document.documentElement;
+    if(!check) return;
+    const KEY="exam-show-gemini";
+    const saved=localStorage.getItem(KEY);
+    if(saved===null||saved==="true"||saved==="false"){
+      check.checked=(saved!=="false");
+    }else{
+      check.checked=true;
+    }
     function apply(){
-      targetCard.style.display=targetCheck.checked?"":"none";
-      baselineCard.style.display=baselineCheck.checked?"":"none";
-      localStorage.setItem("exam-show-target",targetCheck.checked);
-      localStorage.setItem("exam-show-baseline",baselineCheck.checked);
+      root.setAttribute("data-gem",check.checked?"on":"off");
+      localStorage.setItem(KEY,check.checked?"true":"false");
     }
     apply();
-    targetCheck.addEventListener("change",apply);
-    baselineCheck.addEventListener("change",apply);
+    check.addEventListener("change",apply);
   }
-  initRefToggles();
+  initGeminiToggle();
 
   // قبل الطباعة: افتح كل الأسئلة المقفولة عشان الـ PDF يحتوي كل الإجابات،
   // وبعد الطباعة رجّع الحالة الأصلية.
@@ -1514,21 +1415,21 @@ JS = r"""
   });
 
   const selModel=document.getElementById("f-model");
-  const selAxis=document.getElementById("f-axis");
+  const selCat=document.getElementById("f-cat");
   const search=document.getElementById("f-search");
   const count=document.getElementById("f-count");
   const clear=document.getElementById("f-clear");
   function apply(){
-    if(!selModel||!selAxis||!search) return;
-    const m=selModel.value, a=selAxis.value, q=(search.value||"").trim().toLowerCase();
+    if(!selModel||!selCat||!search) return;
+    const m=selModel.value, a=selCat.value, q=(search.value||"").trim().toLowerCase();
     let visible=0;
     document.querySelectorAll(".qblock").forEach(block=>{
       let any=false;
       block.querySelectorAll(".answer-card").forEach(card=>{
         const okModel=(m==="all"||card.dataset.model===m);
-        const okAxis=(a==="all"||card.dataset.axis===a);
+        const okCat=(a==="all"||card.dataset.cat===a);
         const okSearch=(!q||(card.dataset.search||"").includes(q));
-        const show=okModel&&okAxis&&okSearch;
+        const show=okModel&&okCat&&okSearch;
         card.style.display=show?"":"none";
         if(show){any=true;visible++;}
       });
@@ -1537,8 +1438,8 @@ JS = r"""
     });
     if(count) count.textContent=visible+" إجابة ظاهرة";
   }
-  [selModel,selAxis,search].forEach(el=>{if(el){el.addEventListener("input",apply);el.addEventListener("change",apply);}});
-  if(clear) clear.addEventListener("click",()=>{if(selModel)selModel.value="all";if(selAxis)selAxis.value="all";if(search)search.value="";apply();});
+  [selModel,selCat,search].forEach(el=>{if(el){el.addEventListener("input",apply);el.addEventListener("change",apply);}});
+  if(clear) clear.addEventListener("click",()=>{if(selModel)selModel.value="all";if(selCat)selCat.value="all";if(search)search.value="";apply();});
   apply();
 
   // ── الرسم السداسي: تمرير الماوس على وسيلة الإيضاح ⇒ إبراز المضلّع
@@ -1590,7 +1491,8 @@ def build_html(results: list[dict], exam_cfg: dict, run_meta: dict | None = None
         "exam": {
             "version": exam_cfg.get("version"),
             "settings": exam_cfg.get("settings"),
-            "baseline": _baseline(exam_cfg),
+            "categories": exam_cfg.get("categories"),
+            "references": exam_cfg.get("references"),
         },
         "models": results,
     }
@@ -1599,13 +1501,12 @@ def build_html(results: list[dict], exam_cfg: dict, run_meta: dict | None = None
     body = "".join(
         [
             _hero(results, exam_cfg, run_meta),
-            _platform_warning(exam_cfg, run_meta),
             _kpis(results, exam_cfg, run_meta),
             _summary_table(results, exam_cfg),
             model_cards_section(results, exam_cfg),
             radar_section(results, exam_cfg),
             charts_section(results, exam_cfg),
-            _axes_section(results, exam_cfg),
+            _categories_section(results, exam_cfg),
             _heatmap(results, exam_cfg),
             _gates_section(results),
             _perf_section(results, run_meta),
@@ -1634,8 +1535,8 @@ def build_html(results: list[dict], exam_cfg: dict, run_meta: dict | None = None
   <nav>
     <a href="#overview">نظرة عامة</a><a href="#results">المقارنة</a><a href="#cards">النتيجة لكل موديل</a>
     <a href="#radar">الرسم السداسي</a><a href="#charts">رسوم المقارنة</a>
-    <a href="#axes">المحاور</a>
-    <a href="#heatmap">خريطة الدرجات</a><a href="#gates">البوابات</a>
+    <a href="#categories">المحاور</a>
+    <a href="#heatmap">خريطة الدرجات</a><a href="#gates">حدود الدنيا</a>
     <a href="#perf">الأداء المقيس</a><a href="#speed">جدول السرعة</a><a href="#fit">الملاءمة</a>
     <a href="#settings">الإعدادات</a>
     <a href="#answers">الإجابات</a><a href="#transcripts">سجل الإجابات</a><a href="#meta">البيانات</a>

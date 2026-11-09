@@ -2,15 +2,15 @@
 # إعدادات موصى بها لكل موديل — تُقرأ من scripts/model_settings.py
 #
 # المبدأ:
-#   · إعدادات الامتحان (temp=0 · seed=20261106 · ctx=4096 · max_tokens=1200
-#     · الـ system prompt · المصحّح) مثبّتة ومش بتتغيّر — عشان المقارنة بين
-#     الموديلات تبقى صحيحة.
+#   · إعدادات الامتحان (temp=0.6 · top_p=0.95 · seed=1234 · ctx=8192
+#     · max_tokens=4000 · الـ system prompt · المصحّح) مثبّتة ومش بتتغيّر —
+#     عشان المقارنة بين الموديلات تبقى صحيحة.
 #   · توصيات المطوّر بتتطبّق على الإعدادات التشغيلية اللي مش بتأثر على الدرجة:
 #     قالب المحادثة · نوع KV cache · flash-attn · عدد الطبقات على الـ GPU
 #     · threads · device · أي flags إضافية للـ llama-server.
 #   · توصيات التوليد (temperature / top_p / top_k / min_p) بتتعرض في التقرير
-#     بس، لأن تطبيقها بيكسر الحتمية (temp=0) — إلا لو فُعّل
-#     --apply-recommended-sampling knowingly.
+#     بس، لأن تطبيقها بيكسر الحتمية (seed + إعدادات ورقة الامتحان) — إلا لو
+#     فُعّل --apply-recommended-sampling knowingly.
 #
 # المطابقة بالترتيب: repo id مطابق ← glob pattern ← family ← defaults
 # ---------------------------------------------------------------------------
@@ -32,31 +32,6 @@ defaults:
   notes: ""
 
 models:
-  # ── Qwen3.5 (العائلة اللي ورقة الامتحان مبنية عليها) ────────────────────
-  "unsloth/Qwen3.5-4B-GGUF":
-    chat_template: templates/qwen35_egyptian_nothink.jinja
-    kv_cache_type: f16
-    flash_attn: "on"
-    n_gpu_layers: 32
-    recommended_sampling:
-      temperature: 0.7
-      top_p: 0.8
-      top_k: 20
-      min_p: 0.0
-      notes: "توصيات المطوّر (Qwen3.5) — ورقة الامتحان تتطلب temp=0 للتصحيح الحتمي."
-    notes: "موديل خط الأساس المرجعي (61.6/100)."
-
-  "*/Qwen3.5-4B-GGUF":
-    chat_template: templates/qwen35_egyptian_nothink.jinja
-    kv_cache_type: f16
-    flash_attn: "on"
-    recommended_sampling:
-      temperature: 0.7
-      top_p: 0.8
-      top_k: 20
-      min_p: 0.0
-      notes: "عائلة Qwen3.5 — نفس توصيات المطوّر."
-
   # ── أمثلة لإضافة موديل جديد ─────────────────────────────────────────────
   # "owner/Some-Model-GGUF":
   #   chat_template: templates/qwen35_egyptian_nothink.jinja
@@ -69,3 +44,6 @@ models:
   #     top_p: 0.95
   #     notes: "من README بتاع المطوّر."
   #   notes: "سبب الاختيار."
+  #
+  # ⚠ `n_gpu_layers: null` (أو غايب) ⇒ القيمة تجيب من حساب الـ fit
+  #   (ميزانية VRAM بعد الـ ballast). متحطّش رقم ثابت إلا لو عارف إنك عايزه.

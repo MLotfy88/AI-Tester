@@ -33,14 +33,11 @@ from exam_runner import run_exam  # noqa: E402
 from excel_report import write_workbook  # noqa: E402
 from fit_check import analyze as analyze_fit  # noqa: E402
 from references import (  # noqa: E402
-    baseline_platform_warning,
     display_name,
     infer_runner_meta,
     measured_on_gpu,
     runner_label,
     source_badge,
-    target_gap,
-    trust_flag_for,
 )
 from hf_resolver import (  # noqa: E402
     HFError,
@@ -99,39 +96,55 @@ def _local_manifest(path: Path) -> dict:
 
 
 def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
+    """ملخص Markdown للـ GitHub Actions Summary — بصيغة الامتحان v3."""
     run_meta = infer_runner_meta(run_meta, results)
-    baseline = exam_cfg.get("baseline") or {}
-    target = exam_cfg.get("target") or {}
-    axes_cfg = exam_cfg.get("axes") or {}
+    categories = exam_cfg.get("categories") or {}
+    cat_keys = list(categories.keys())
+    refs = exam_cfg.get("references") or {}
+    gemini = refs.get("gemini") or {}
+    gemini_axes = gemini.get("axes") or {}
+    settings = exam_cfg.get("settings") or {}
+
     lines = [
-        f"# نتائج امتحان المساعد المصري — {run_meta.get('run_id', '')}",
+        "# نتائج امتحان المساعد المصري — v3 — " + str(run_meta.get("run_id", "")),
         "",
         f"- **البداية:** {run_meta.get('started_at', '—')}",
         f"- **النهاية:** {run_meta.get('finished_at', '—')}",
         f"- **عدد الموديلات:** {len(results)}",
-        f"- **الإعدادات:** temp=0 · seed=20261106 · ctx={exam_cfg.get('settings', {}).get('ctx_size')} · "
-        f"max_tokens={exam_cfg.get('settings', {}).get('max_tokens')}",
-        f"- **سياسة التصحيح:** {run_meta.get('policy', 'paper')} · "
-        f"الوضع: {run_meta.get('template_mode', 'auto')} · الكمية: {run_meta.get('quant_pattern', 'Q4_K_M')}",
+        f"- **الامتحان:** {len(exam_cfg.get('questions') or [])} سؤال مصحّح · "
+        f"{len(exam_cfg.get('profile') or [])} سؤال استكشافي · "
+        f"{len(cat_keys)} محاور (5 معايير × درجتين لكل سؤال)",
+        f"- **الإعدادات:** temp={settings.get('temperature')} · top_p={settings.get('top_p')} · "
+        f"seed={settings.get('seed')} · ctx={settings.get('ctx_size')} · "
+        f"max_tokens={settings.get('max_tokens')} · تكرار={settings.get('repeats')} "
+        f"({', '.join(settings.get('repeat_for') or [])})",
         f"- **بيئة التشغيل:** {runner_label(run_meta)} — "
         + ("أرقام السرعة **مقيسة فعلياً على GPU**." if measured_on_gpu(run_meta)
            else "تشغيل CPU (مفيش GPU) — أرقام السرعة مقيسة على المعالج."),
         "",
-        "| # | الموديل | الحالة | الدرجة /100 | درجة المقارنة (baseline) | الحكم | غير موثوق (②) | ① | ② | ③ | ④ | البوابات | Fit | ⚡ tok/s (مقيس) | الزمن | Δ الهدف | المسافة عن الهدف |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| # | الموديل | الحالة | الدرجة /100 | الحكم | محاور تحت الحد الأدنى | "
+        + " | ".join(str(categories.get(k, {}).get("short") or k) for k in cat_keys)
+        + " | Fit | tok/s | الزمن |",
+        "|---|---|---|---|---|---|"
+        + "---|" * len(cat_keys)
+        + "---|---|---|",
     ]
+
     for i, result in enumerate(results, 1):
         exam = result.get("exam") or {}
         fit = result.get("fit") or {}
         rt = result.get("runtime") or {}
-        axes = exam.get("axes") or {}
-        axis_vals = " | ".join(
-            f"{(axes.get(k) or {}).get('score', '—')}/{(axes.get(k) or {}).get('max', '—')}"
-            for k in ("1", "2", "3", "4")
-        )
-        fired = "، ".join(g["code"] for g in exam.get("gates", []) if g.get("fired")) or "سليمة"
+        cats = exam.get("categories") or {}
+        cells = []
+        for k in cat_keys:
+            pct = (cats.get(k) or {}).get("percent")
+            cells.append(f"{pct:g}%" if isinstance(pct, (int, float)) else "—")
+        axis_vals = " | ".join(cells)
+        failed = exam.get("failed_categories") or []
+        failed_names = "، ".join(
+            str((categories.get(k) or {}).get("name") or k) for k in failed
+        ) or "سليمة"
         status = "تم" if exam else "فشل"
-        comparison = (exam.get("baseline") or {}).get("total", "—")
         perf = rt.get("perf") or {}
         tg_avg = (perf.get("tg_tps") or {}).get("avg")
         competing = (rt.get("gpu_contention") or {}).get("competing_processes") or []
@@ -139,56 +152,69 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             f"{round(float(tg_avg), 1)} ⚠" if tg_avg is not None and competing
             else (round(float(tg_avg), 1) if tg_avg is not None else "—")
         )
-        # وسم «غير موثوق» — على المحور ② فقط (مش حكم كلي)
-        trust = str(exam.get("trust_flag") or "") or str((axes.get("2") or {}).get("trust_flag") or "")
-        # المسافة عن شريط الهدف (Gemini 2.5 Pro)
-        gap = target_gap(exam, target, axes_cfg) if target else {"total": None, "distance": None}
-        gap_total = gap.get("total")
-        gap_cell = "—" if gap_total is None else f"{gap_total:+.2f}"
-        dist_cell = "—" if gap.get("distance") is None else f"{gap['distance']:.1f}"
         lines.append(
-            f"| {i} | `{result.get('model', '')}` | {status} | {exam.get('total', '—')} | {comparison} | "
-            f"{exam.get('verdict') or (result.get('error') or '—')} | {trust or '—'} | {axis_vals} | {fired} | "
-            f"{fit.get('fit_class', '—')} | {speed_cell} | {round((rt.get('seconds_total') or 0) / 60, 1)} د | "
-            f"{gap_cell} | {dist_cell} |"
+            f"| {i} | `{result.get('model', '')}` | {status} | {exam.get('total', '—')} | "
+            f"{exam.get('verdict') or (result.get('error') or '—')} | {failed_names} | "
+            f"{axis_vals} | {fit.get('fit_class', '—')} | {speed_cell} | "
+            f"{round((rt.get('seconds_total') or 0) / 60, 1)} د |"
         )
 
-    # ── صفوف المراجع: خط الأساس (مقاس) + شريط الهدف (Gemini)
-    if baseline:
-        b_axes = baseline.get("axes") or {}
-        b_cells = " | ".join(f"{b_axes.get(k, '—')}/{((axes_cfg.get(k) or {}).get('max'), '—')[0]}" for k in ("1", "2", "3", "4"))
-        lines.append(
-            f"| — | **{baseline.get('name', 'المرجع الإضافي')}** | مرجع | {baseline.get('total', '—')} | "
-            f"{baseline.get('total', '—')} | {baseline.get('verdict', '')} | "
-            f"{trust_flag_for(baseline, axes_cfg) or '—'} | {b_cells} | "
-            f"{'، '.join(baseline.get('gates') or []) or 'سليمة'} | — | — | — | — | — |"
-        )
-    if target:
-        t_axes = target.get("axes") or {}
-        t_cells = " | ".join(f"{t_axes.get(k, '—')}/{((axes_cfg.get(k) or {}).get('max'), '—')[0]}" for k in ("1", "2", "3", "4"))
-        lines.append(
-            f"| — | **🎯 {target.get('name', 'الهدف')}** | هدف | {target.get('total', '—')} | "
-            f"{target.get('total', '—')} | {target.get('verdict', '')} | — | {t_cells} | "
-            f"{'، '.join(target.get('gates') or []) or 'سليمة'} | — | — | — | — | 0.00 | 0.0 |"
-        )
+    # ── مرجع Gemini 2.5 Pro (عرض فقط — مالوش أي تأثير في الحكم)
+    if gemini_axes:
+        ref_cells = []
+        values = []
+        for k in cat_keys:
+            val = (gemini_axes.get(k) or {}).get("value")
+            if isinstance(val, (int, float)):
+                ref_cells.append(f"{val:g}%")
+                values.append(float(val))
+            else:
+                ref_cells.append("—")
+        avg = round(sum(values) / len(values), 2) if values else None
         lines += [
             "",
-            f"> **🎯 الهدف ({target.get('name')}):** **{target.get('total')}/100** · "
-            f"المصدر: **{target.get('note') or source_badge(target)}** · "
-            "أرقامه **معايرة يدوية** (مش مقيسة آلياً) ⇒ بتظهر كـ«هدف» مش كـ«مقاس». "
-            "**«المسافة عن الهدف»** = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً، الأقل = الأقرب).",
+            f"| — | **🎯 {gemini.get('name', 'Gemini 2.5 Pro')}** (مرجع عرض فقط) | مرجع | "
+            f"{avg if avg is not None else '—'} | — | — | " + " | ".join(ref_cells) + " | — | — | — |",
+            "",
+            f"> **🎯 المرجع: {gemini.get('name', 'Gemini 2.5 Pro')} — عرض فقط ⛔**",
+            "> الأرقام دي **بنشماركات عامة منشورة** لنفس النموذج (مش مقاسة على أسئلة امتحاننا)، "
+            "اتحوّلت لتقدير لكل محور على سعة 0..100.",
+            "> **مالهاش أي تأثير** في درجة أي نموذج، ولا في الحكم، ولا في بوابات الحد الأدنى.",
+            f"> المصدر: {gemini.get('primary_source', {}).get('title', '—')} — "
+            f"{gemini.get('primary_source', {}).get('url', '')}",
         ]
-    if baseline:
+        if gemini.get("note"):
+            lines.append(f"> {str(gemini['note']).strip()}")
+        extra = gemini.get("extra_indicators") or []
+        if extra:
+            lines += [
+                "",
+                "**مؤشرات إضافية (Gemini 2.5 Pro — من مصادر منشورة):**",
+                "",
+                "| المؤشر | القيمة | المصدر |",
+                "|---|---|---|",
+            ]
+            for row in extra:
+                lines.append(
+                    f"| {row.get('name', '—')} | {row.get('value', '—')} {row.get('unit', '')} | "
+                    f"{row.get('src', '—')} |"
+                )
+
+    if not measured_on_gpu(run_meta):
         lines += [
             "",
-            f"> **📏 المرجع الإضافي ({baseline.get('name')}) — مش الهدف:** **{baseline.get('total')}/100** · "
-            f"المصدر: **{baseline.get('note') or source_badge(baseline)}** · "
-            "ده الموديل المرجعي **المقاس آلياً** بنفس المصحّح ⇒ بيستخدم كمؤشر إضافي، "
-            "لكن الهدف الأساسي في التقرير هو Gemini 2.5 Pro.",
+            "> ⚠ **بيئة المعايرة:** التشغيل ده تم على **CPU** — أرقام السرعة (tok/s) "
+            "مقيسة على المعالج، وأعمدة «سقف tg/pp» في تقرير الـ Fit **تقديرية** لجهازك "
+            "المستهدف (`config/device_profile.yaml`).",
         ]
-    platform_warning = baseline_platform_warning(exam_cfg, run_meta)
-    if platform_warning:
-        lines += ["", f"> ⚠ **فرق بيئة القياس:** {platform_warning}"]
+    else:
+        lines += [
+            "",
+            "> ℹ️ **بيئة المعايرة:** الأرقام المقيسة اتأخذت على **"
+            + str(run_meta.get("runner_gpu") or "GPU")
+            + "** — أعمدة «سقف tg/pp» في تقرير الـ Fit **تقديرية** لجهازك المستهدف "
+            "(`config/device_profile.yaml`) ومالهاش علاقة بالأرقام المقيسة.",
+        ]
 
     if any(
         (r.get("runtime") or {}).get("gpu_contention", {}).get("competing_processes")
@@ -199,40 +225,28 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             "> ⚠ **منافسة على الكارت:** وقت القياس كانت فيه عمليات استدلال تانية شغالة — "
             "السرعة المقيسة (tok/s) **أقل من الحقيقي**. أعد القياس بعد ما تقفل أي سيرفر تاني.",
         ]
-    if any((r.get("exam") or {}).get("baseline") for r in results):
-        lines += [
-            "",
-            "> **درجات المقارنة (baseline):** نفس الفحوص بدون عواقب البوابات وبدون عقوبة الطول — "
-            "وهي المقياس اللي اتقاس بيه الرقم المرجعي المنشور 61.6، فالمقارنة لازم تكون على العمود ده.",
-        ]
-    g5_scope = str(
-        ((exam_cfg.get("settings") or {}).get("g5_reasoning_channel") or "visible")
-    )
+
     lines += [
         "",
-        f"> **سياسة G5:** `{g5_scope}` — "
-        + (
-            "وسوم <think> في الرد المرئي فقط (مطابق لورقة الامتحان §52). "
-            "محتوى قناة reasoning_content المنفصلة يُسجَّل كملاحظة بدون عقوبة."
-            if g5_scope == "visible"
-            else "أي محتوى في قناة reasoning_content يُحتسب thinking (عقوبة −1/حالة)."
-        ),
+        "### الدرجات تفصيلياً",
+        "",
+        "| الموديل | المحور | الوزن | الحد الأدنى | النسبة | النقاط | الحالة |",
+        "|---|---|---|---|---|---|---|",
     ]
-    reasoning_rows = [
-        (r.get("model"), ((r.get("exam") or {}).get("reasoning_channel_questions") or []))
-        for r in results
-        if ((r.get("exam") or {}).get("reasoning_channel_questions"))
-    ]
-    if reasoning_rows:
-        lines += [
-            "",
-            "### أسئلة استخدمت قناة تفكير منفصلة (لا تُحتسب ضمن G5)",
-            "",
-            "| الموديل | الأسئلة |",
-            "|---|---|",
-        ]
-        for model, qids in reasoning_rows:
-            lines.append(f"| `{model}` | {('، '.join(qids))} |")
+    for result in results:
+        exam = result.get("exam") or {}
+        if not exam:
+            continue
+        cats = exam.get("categories") or {}
+        for key in cat_keys:
+            row = cats.get(key) or {}
+            state = "⛔ تحت الحد" if row.get("failed_min") else "✅"
+            lines.append(
+                f"| `{result.get('model', '')}` | {row.get('name', key)} | "
+                f"{row.get('weight', 0):g} | {row.get('min_percent', 0):g}% | "
+                f"{row.get('percent', 0):g}% | {row.get('points', 0):g} | {state} |"
+            )
+
     settings_rows = [
         (r.get("model"), r.get("settings") or {}) for r in results if r.get("settings")
     ]
@@ -256,8 +270,9 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
                 f"{st.get('device') or rt.get('device') or '—'} | "
                 f"{st.get('flash_attn') or rt.get('flash_attn') or '—'} |"
             )
+
     perf_rows = [
-        (r.get("model"), (r.get("runtime") or {}).get("perf") or {}, r.get("fit") or {})
+        (r.get("model"), (r.get("runtime") or {}).get("perf") or {})
         for r in results
         if ((r.get("runtime") or {}).get("perf"))
     ]
@@ -269,7 +284,7 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             "| الموديل | توليد tok/s (متوسط) | معالجة prompt tok/s | أول استجابة ms | زمن الطلب s (متوسط) |",
             "|---|---|---|---|---|",
         ]
-        for model, perf, fit in perf_rows:
+        for model, perf in perf_rows:
             tg = perf.get("tg_tps") or {}
             pp = perf.get("pp_tps") or {}
             ttft = perf.get("ttft_ms") or {}
@@ -278,23 +293,12 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
                 f"| `{model}` | {tg.get('avg', '—')} | {pp.get('avg', '—')} | "
                 f"{ttft.get('avg', '—')} | {req.get('avg', '—')} |"
             )
-    if baseline:
-        lines += [
-            "",
-            f"**📏 المرجع الإضافي:** {baseline.get('name', '')} — **{baseline.get('total')}/100** · "
-            f"{baseline.get('verdict', '')} · بوابات: {'، '.join(baseline.get('gates') or []) or 'سليمة'} · "
-            f"المصدر: {baseline.get('note') or source_badge(baseline)}",
-        ]
-    if target:
-        lines += [
-            "",
-            f"**🎯 الهدف:** {target.get('name', '')} — **{target.get('total')}/100** · "
-            f"{target.get('verdict', '')} · المصدر: {target.get('note') or source_badge(target)}",
-        ]
+
     lines += [
         "",
-        "> المخرجات: `exam-results.xlsx` (10 شيتات) · `exam-report.html` (تقرير مقارنة تفاعلي: كارت لكل موديل + رسم سداسي + رسوم مقارنة + جدول سرعة + سجل الإجابات) · `run.log`",
+        "> المخرجات: `exam-results.xlsx` · `exam-report.html` (تقرير تفاعلي) · `run.log`",
         "> التصحيح حتمي بالكامل — نفس الإجابات تعطي نفس الدرجات.",
+        "> **مرجع Gemini 2.5 Pro مرجع عرض فقط** — مالوش أي تأثير في الدرجة ولا الحكم.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -303,7 +307,7 @@ def _display_results(results: list[dict]) -> list[dict]:
     """نسخة **عرض** من النتائج: اسم الموديل مختصر + المسار الكامل محفوظ.
 
     الموديلات المحلية بتبقى مسارات طويلة (90+ حرف) ⇒ بتخنق جداول التقرير.
-    هنا بنقصّرها لاسم الملف (`Qwen3.5-4B-IQ4_XS`) ونخزّن الأصل في `model_full`
+    هنا بنقصّرها لاسم الملف (`model-Q4_K_M.gguf`) ونخزّن الأصل في `model_full`
     عشان يفضل متاح كـtooltip. **الأرقام ما تتغيّرش خالص.**
     """
     out: list[dict] = []
@@ -342,7 +346,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="تشغيل امتحان المساعد المصري على موديلات GGUF")
     ap.add_argument("--models", required=True, help="repo ids أو مسارات GGUF محلية، مفصولة بفاصلة")
     ap.add_argument("--quant", "--quant-pattern", dest="quant", default="Q4_K_M")
-    ap.add_argument("--ctx", type=int, default=4096)
+    ap.add_argument("--ctx", type=int, default=0, help="0 = من إعدادات ورقة الامتحان (8192)")
     ap.add_argument("--kv", default="", choices=["", "f16", "q8_0", "q4_0"], help="فاضي = من overrides/الافتراضي")
     ap.add_argument("--threads", type=int, default=0, help="0 = من overrides/الافتراضي")
     ap.add_argument("--ngl", type=int, default=None, help="مش محدد = القيمة المحسوبة من الملاءمة")
@@ -361,20 +365,13 @@ def main() -> int:
         action="store_true",
         help="يطبّق توصيات temperature/top_p/top_k من المطوّر (بيكسر الحتمية!)",
     )
-    ap.add_argument(
-        "--policy",
-        default="paper",
-        choices=["paper", "baseline"],
-        help="paper=قواعد ورقة الامتحان كاملة · baseline=مطابق للرقم المرجعي المنشور 61.6",
-    )
-    ap.add_argument("--system-prompt", default="prompts/owner_system_prompt.txt")
-    ap.add_argument("--exam", default="config/exam.yaml")
+    ap.add_argument("--exam", default="exam/exam_questions_v2.json", help="ملف مواصفات الامتحان v3")
     ap.add_argument("--out", default="out")
     ap.add_argument("--run-id", default="")
     ap.add_argument("--max-gib", type=float, default=10.0)
     ap.add_argument("--model-timeout", type=float, default=300.0, help="دقائق لكل موديل")
     ap.add_argument("--total-timeout", type=float, default=330.0, help="دقائق لكل التشغيل قبل الـ 6 ساعات")
-    ap.add_argument("--request-timeout", type=float, default=900.0, help="ثواني لكل سؤال")
+    ap.add_argument("--request-timeout", type=float, default=1800.0, help="ثواني لكل سؤال")
     ap.add_argument("--startup-timeout", type=float, default=900.0)
     ap.add_argument("--limit", type=int, default=0, help="حد أسئلة للتجربة السريعة (0 = الكل)")
     ap.add_argument("--device", default="", help="device للـ offload (مثال: Vulkan0، CUDA0)")
@@ -397,12 +394,13 @@ def main() -> int:
 
     exam_cfg = load_exam_from(args.exam)
     settings = exam_cfg.get("settings") or {}
-    fixed_ctx = int(settings.get("ctx_size", 4096))
-    if args.ctx != fixed_ctx:
+    fixed_ctx = int(settings.get("ctx_size", 8192))
+    ctx = args.ctx if args.ctx else fixed_ctx
+    if ctx != fixed_ctx:
         logger.error(
             "ctx_size=%s مرفوض: ورقة الامتحان ثابتة على %s. "
             "أي قيمة مختلفة تلغي قابلية المقارنة بين الموديلات.",
-            args.ctx,
+            ctx,
             fixed_ctx,
         )
         return 2
@@ -414,12 +412,10 @@ def main() -> int:
 
     server_path = repo_path(args.server)
     template_path = repo_path(args.template)
-    prompt_path = repo_path(args.system_prompt)
     if not args.dry_run:
         for path, label in (
             (server_path, "llama-server"),
             (template_path, "القالب"),
-            (prompt_path, "الـ system prompt"),
         ):
             if not path.exists():
                 logger.error("%s مش موجود: %s", label, path)
@@ -435,7 +431,7 @@ def main() -> int:
         "finished_at": "",
         "models_input": ", ".join(models),
         "quant_pattern": args.quant,
-        "ctx": args.ctx,
+        "ctx": ctx,
         "kv": args.kv or "auto",
         "threads": args.threads or "auto",
         "ngl": args.ngl if args.ngl is not None else "auto",
@@ -446,29 +442,28 @@ def main() -> int:
         "template": args.template,
         "template_mode": args.template_mode,
         "overrides": args.overrides,
-        "policy": args.policy,
+        "exam_spec": str(args.exam),
+        "exam_version": exam_cfg.get("version"),
         "apply_recommended_sampling": bool(args.apply_recommended_sampling),
-        "system_prompt": args.system_prompt,
+        "system_prompt": "system_prompt_style (من ملف المواصفات)",
         "mode": "llama-server /v1/chat/completions",
         "runner_kind": runner_kind,
         "runner_label": args.runner_label,
         "runner_gpu": args.runner_gpu,
         "platform": platform.platform(),
         "python": platform.python_version(),
-        "exam_version": exam_cfg.get("version"),
         "out_dir": str(out_dir),
     }
 
     logger.info(
-        "run_id=%s · models=%d · quant=%s · ctx=%s · policy=%s · template-mode=%s",
+        "run_id=%s · models=%d · quant=%s · ctx=%s · template-mode=%s",
         run_id,
         len(models),
         args.quant,
-        args.ctx,
-        args.policy,
+        ctx,
         args.template_mode,
     )
-    logger.info("template=%s · prompt=%s", template_path, prompt_path)
+    logger.info("template=%s · %d سؤال · %d محور", template_path, len(exam_cfg["questions"]), len(exam_cfg["categories"]))
     logger.info("بيئة التشغيل: %s (kind=%s · gpu=%s)", runner_label(run_meta), runner_kind, args.runner_gpu or "—")
     if args.dry_run:
         for model in models:
@@ -571,12 +566,38 @@ def main() -> int:
             fit = analyze_fit(
                 manifest["primary_path"],
                 profile_path=args.device_profile,
-                ctx=args.ctx,
+                ctx=ctx,
                 kv=eff_kv,
             )
             eff_ngl = ms.n_gpu_layers
             if eff_ngl is None:
-                eff_ngl = args.ngl if args.ngl is not None else int(fit.get("ngl") or 0)
+                if args.ngl is not None:
+                    eff_ngl = args.ngl
+                elif fit.get("ngl") is not None:
+                    eff_ngl = int(fit["ngl"])
+                else:
+                    # ⚠ حارس:_fit فشل (غالباً `gguf` مش متثبّت ⇒ ميتاداتا GGUF
+                    #   ما اتقرتش ⇒ fit_class=Unknown). قبل v3 كان السطر ده
+                    #   `int(fit.get("ngl") or 0)` ⇒ ngl=0 بصمت ⇒ التشغيل كله على
+                    #   المعالج ونتايج مضلّلة (5.6 tok/s و 54 دقيقة على Kaggle).
+                    #   دلوقتي: نوقف loudly بدل ما نشغّل على CPU ونقول «GPU».
+                    logger.error(
+                        "❌ اتحسب الـ fit/meta للGGUF (%s). بدونها مش نعرف نرفع كام "
+                        "طبقة على الكارت — تشغيل CPU هيطلع نتايج مضلّلة. "
+                        "ثبّت gguf (pip install gguf) أو مرّر --ngl صراحة.",
+                        fit.get("error") or "fit_class=" + str(fit.get("fit_class")),
+                    )
+                    raise SystemExit(
+                        "فشل حساب الـ fit — راجع السطر فوق. (مطلوب: gguf مثبّت "
+                        "أو --ngl محدد يدوياً)."
+                    )
+            if int(eff_ngl) <= 0 and eff_device:
+                logger.warning(
+                    "⚠ ngl=%s مع device=%s — الموديل مش رافع على الكارت "
+                    "(هيشتغل على المعالج). ده طبيعي لو الموديل أكبر من ميزانية VRAM.",
+                    eff_ngl,
+                    eff_device,
+                )
             logger.info(
                 "fit=%s · ngl=%s/%s · KV=%s GiB · tg=%s tok/s",
                 fit.get("fit_class"),
@@ -585,6 +606,7 @@ def main() -> int:
                 fit.get("kv_total_gib"),
                 fit.get("tg_tps"),
             )
+            logger.info("ngl المتّبع فعلياً: %s", eff_ngl)
             logger.info("الإعدادات المطبّقة [%s]: %s", ms.matched_key or ms.source, " · ".join(ms.applied))
             for warning in ms.warnings:
                 logger.warning("تنبيه: %s", warning)
@@ -605,12 +627,12 @@ def main() -> int:
                 gguf_path=manifest["primary_path"],
                 server_bin=server_path,
                 template_path=eff_template,
-                system_prompt_path=prompt_path,
+                system_prompt=str(exam_cfg.get("system_prompt") or ""),
                 questions=exam_cfg["questions"],
                 settings=run_settings,
                 out_dir=out_dir,
                 slug=slugify(model.replace("/", "__")),
-                ctx=args.ctx,
+                ctx=ctx,
                 threads=eff_threads,
                 kv=eff_kv,
                 ngl=eff_ngl,
@@ -621,6 +643,9 @@ def main() -> int:
                 device=eff_device,
                 flash_attn=eff_flash,
                 extra_args=eff_extra,
+                tools=list(exam_cfg.get("tools") or []),
+                repeats=int(settings.get("repeats") or 1),
+                repeat_for=list(settings.get("repeat_for") or []),
             )
             runtime = run["runtime"]
             logger.info(
@@ -633,7 +658,6 @@ def main() -> int:
                 run["answers"],
                 exam_cfg,
                 model_meta={**manifest, "run_id": run_id},
-                policy=args.policy,
             )
             logger.info(
                 "النتيجة: %s/100 · %s · بوابات: %s",
@@ -717,9 +741,18 @@ def main() -> int:
 
 
 def load_exam_from(path: str | Path) -> dict:
+    """يحمّل مواصفات الامتحان v3 من ملف JSON (المصدر الوحيد للحقيقة)."""
+    from exam.spec import build_exam, load_spec
+
+    p = Path(path)
+    if not p.is_absolute():
+        p = repo_path(p)
+    if p.suffix.lower() == ".json":
+        return build_exam(load_spec(p))
+    # fallback: YAML (للتوافق مع الملفات القديمة)
     from common import load_yaml
 
-    return load_yaml(path)
+    return load_yaml(p)
 
 
 if __name__ == "__main__":

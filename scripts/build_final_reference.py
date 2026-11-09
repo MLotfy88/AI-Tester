@@ -1,8 +1,8 @@
-"""يبني مجلد «Final AI Test» — نسخة مرجعية مستقلة من الأداة.
+"""يبني مجلد «Final AI Test» — نسخة مرجعية مستقلة من الأداة (v3).
 
 النسخة دي بتتعمل في **آخر** خطوة عشان تكون نهائية ومطابقة تماماً للأداة:
-  · ملفَّي التوثيق الأساسية (EXAM-PAPER + HF-Model-Selection-Workflow).
-  · ملف توثيق أخطاء التصحيح (GRADING-ERRORS-AND-FIXES).
+  · ملفات التوثيق الأساسية (README + HF-Model-Selection-Workflow + GRADING-ERRORS).
+  · **ملف مواصفات الامتحان** `exam/exam_questions_v2.json` (المصدر الوحيد للحقيقة).
   · نسخة كل سكربتات الامتحان والتصحيح والتقارير + الإعدادات + القوالب + الاختبارات.
   · MANIFEST.md: قائمة الملفات + SHA-256 + تاريخ النسخة (للتحقق من عدم التغيّر).
 
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "dist" / "Final AI Test"
 
 DOCS = [
-    "EXAM-PAPER-v1.md",
+    "README.md",
     "HF-Model-Selection-Workflow.md",
     "GRADING-ERRORS-AND-FIXES.md",
 ]
@@ -27,7 +27,7 @@ DOCS = [
 TREES = [
     "scripts",
     "config",
-    "prompts",
+    "exam",
     "templates",
     "tests",
     "kaggle",
@@ -36,10 +36,11 @@ TREES = [
 SKIP_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache"}
 SKIP_SUFFIX = {".pyc", ".pyo", ".log"}
 
-README_TEXT = """# Final AI Test — النسخة المرجعية المستقلة
 
-مجلد مرجعي **مستقل** لاختبار الموديلات: فيه ورقة الامتحان + المصحّح + كل ما يتعلق بالامتحان
-(أسئلة، قواعد، بوابات، سلالم درجات، قوالب، prompts، إعدادات، اختبارات).
+README_TEXT = """# Final AI Test — النسخة المرجعية المستقلة (v3)
+
+مجلد مرجعي **مستقل** لاختبار الموديلات: فيه ورقة الامتحان (ملف المواصفات) + المصحّح + كل ما يتعلق بالامتحان
+(أسئلة، rubric، محاور، حدود دنيا، قوالب، إعدادات، اختبارات).
 
 > هدفه إن يبقى **مرجع أساسي** تقدر تقيس عليه أي موديل، **بصرف النظر عن الأداة** اللي بيشغّل
 > الموديل (llama.cpp، LM Studio، Ollama، vLLM، API…).
@@ -48,49 +49,46 @@ README_TEXT = """# Final AI Test — النسخة المرجعية المستق�
 
 | المسار | المحتوى |
 |---|---|
-| `EXAM-PAPER-v1.md` | **ورقة الامتحان الأصلية**: الـ21 سؤال، المحاور الأربعة، سلالم الدرجات، البوابات G1–G8، خط الأساس 61.6 + شريط الهدف Gemini 2.5 Pro (77). |
+| `exam/exam_questions_v2.json` | **المصدر الوحيد للح-truth**: 33 سؤال مصحّح + 14 استكشافي + 8 محاور بأوزان وحدود دنيا + الإعدادات الثابتة + الأدوات + `system_prompt_style`. |
+| `exam/منهج الامتحان الجديد.md` | منهج الامتحان الجديد بالعربي. |
 | `HF-Model-Selection-Workflow.md` | مرجع اختيار الموديل: fit، حدود VRAM/RAM، السرعة، ومحاكاة الجهاز على Kaggle. |
 | `GRADING-ERRORS-AND-FIXES.md` | **سجل أخطاء التصحيح**: كل خطأ، سبب ظهوره، الكود قبل/بعد، والأثر بالأرقام. اقراه قبل تعديل أي مصحّح. |
-| `config/exam.yaml` | النسخة الآلية من الورقة: الأسئلة، المحاور، الإعدادات الثابتة (temp=0 · seed=20261106 · ctx=4096 · max_tokens=1200)، خط الأساس (مقاس آلياً) + شريط الهدف Gemini 2.5 Pro (معايرة يدوية). |
+| `config/references.yaml` | مراجع **العرض فقط** + حدود الحكم (85/70/55) — كل رقم مرجعي مكتوب مصدره. |
 | `config/device_profile.yaml` | مواصفات الجهاز المستهدف + ميزانية VRAM (3.4 GiB). |
 | `config/model_overrides.yaml` | توصيات per-model (قالب/KV/ngl/threads/device/Sampling موصى به). |
-| `prompts/owner_system_prompt.txt` | الـ system prompt الثابت — لازم يتبعت مع كل سؤال. |
 | `templates/qwen35_egyptian_nothink.jinja` | قالب المحادثة الثابت (مع منع thinking). |
-| `scripts/exam/` | **المصحّح**: `grader.py` (سياستا `paper`/`baseline` + البوابات G1–G8 + الحكم) · `axis1/axis2/axis34.py` (فحوص المحاور) · `lib.py` (أدوات النص). |
+| `scripts/exam/` | **المصحّح**: `spec.py` (تحميل المواصفات) · `grader.py` (التجميع + متوسط التكرار + الحكم) · `rubric_engine.py` (نسب المحاور + بوابات الحد الأدنى) · `rubric_lib.py` + `checks_*.py` (165 فحص) · `lib.py` (أدوات النص). |
 | `scripts/exam_runner.py` · `scripts/run_exam.py` | تشغيل الموديل وتمرير الإجابات للمصحّح (في الذاكرة — بلا JSON وسيط). |
-| `scripts/excel_report.py` · `scripts/html_report.py` · `scripts/html_charts.py` | التقارير: Excel (10 شيتات) وHTML (كارت لكل موديل + الرسم السداسي + رسوم المقارنة + جدول السرعة + سجل الإجابات الكامل) — **وكلهم بيعرضوا شريط الهدف (Gemini 2.5 Pro) في كل رسوم المقارنة**. |
-| `scripts/references.py` | الطبقة المشتركة للمراجع: خط الأساس + **شريط الهدف (Gemini 2.5 Pro)** · حساب **«المسافة عن الهدف»** · وسم المصدر (مقاس / معايرة يدوية). |
+| `scripts/excel_report.py` · `scripts/html_report.py` · `scripts/html_charts.py` | التقارير: Excel (11 شيت) وHTML تفاعلي (كارت لكل موديل + الرسم السداسي + رسوم المقارنة + جدول السرعة + سجل الإجابات). |
+| `scripts/references.py` | الطبقة المشتركة للمراجع: مرجع Gemini 2.5 Pro (**عرض فقط ⛔**) + حساب **المسافة** على المحاور الثمانية + وسم المصدر. |
 | `scripts/fit_check.py` · `scripts/hf_resolver.py` · `scripts/model_settings.py` | fit والملاءمة، تنزيل GGUF، وطبقة الإعدادات لكل موديل. |
-| `kaggle/` | مسار Kaggle GPU (فحص الكارت + ballast رام/VRAM + بناء CUDA + تشغيل). |
-| `tests/test_smoke.py` | 38 اختباراً للمصحّح والإعدادات والتقارير (من غير شبكة). |
+| `kaggle/` | مسار Kaggle GPU (فحص الكارت + ballast رام/VRAM + بناء CUDA + تشغيل + تنظيف Output). |
+| `tests/test_smoke.py` | اختبارات المصحّح والإعدادات والتقارير (من غير شبكة). |
 | `MANIFEST.md` | قائمة كل الملفات + SHA-256 + تاريخ النسخة (للتحقق إن النسخة سليمة). |
 
 ## استخدام النسخة دي مع أي أداة
 
-1. **ثبّت الـ prompt والقالب:** انسخ `prompts/owner_system_prompt.txt` و
-   `templates/qwen35_egyptian_nothink.jinja` وفعّل `chat_template_kwargs: {"enable_thinking": false}`
-   (ورقة الامتحان §0.1 — من غيره الردود بتفضل فاضية).
-2. **الإعدادات الثابتة:** `temperature=0` · `top_p=1` · `seed=20261106` · `ctx_size=4096` ·
-   `max_tokens=1200` · نفس الـ system prompt · نفس القالب. أي تغيير بيكسر المقارنة.
-3. **الأسئلة:** الـ21 سؤال في `EXAM-PAPER-v1.md` (ولها نسخة آلية في `config/exam.yaml`).
+1. **ثبّت القالب:** انسخ `templates/qwen35_egyptian_nothink.jinja` وفعّل
+   `chat_template_kwargs: {"enable_thinking": false}` (من غيره الردود بتفضل فاضية).
+2. **الإعدادات الثابتة:** `temperature=0.6` · `top_p=0.95` · `seed=1234` · `ctx_size=8192` ·
+   `max_tokens=4000` · نفس الـ system prompt (من `system_prompt_style`) · نفس القالب.
+   أي تغيير بيكسر المقارنة.
+3. **الأسئلة:** 33 سؤال في `exam/exam_questions_v2.json` (المصدر الوحيد للحقيقة).
 4. **التصحيح:** بعد ما تاخد الإجابات، شغّل المصحّح على نفس الإجابات:
 
    ```python
    import sys; sys.path.insert(0, "scripts")
-   from common import load_yaml
+   from common import load_exam
    from exam.grader import grade_exam
 
-   exam = load_yaml("config/exam.yaml")
-   graded = grade_exam({"A1": "...", "A2": "..."}, exam, policy="paper")
+   exam = load_exam()
+   graded = grade_exam({"EG1": "...", "LG1": [{"answer": "..."}, {"answer": "..."}]}, exam)
    print(graded["total"], graded["verdict"])
    ```
 
-5. **قارن كده:** `policy="paper"` (صارم حسب الورقة) أو `policy="baseline"` (مطابق للرقم
-   المنشور 61.6). **لازم تقارن كل الموديلات بنفس السياسة.**
+5. **التكرار:** محاور `LG` و `IF` و `TL` بتمرّ مرتين — ابعت قائمتين تحت المفتاح نفسه
+   (أو `LG1__1` / `LG1__2`) والمصحّح هياخد المتوسط.
 6. **اقرأ `GRADING-ERRORS-AND-FIXES.md`** قبل ما تظلم موديل بسبب false positive معروف.
-7. **انتبه لقناة التفكير:** G5 (ورقة §52) بتتحسب على وسوم `<think>` **في الرد المرئي** فقط.
-   لو أداتك ترجّع `reasoning_content` في حقل منفصل، سيبه كـ **ملاحظة** مش عقوبة
-   (`settings.g5_reasoning_channel: visible` افتراضياً · `any` لو حبيت الأشد).
 
 ## مقارنة أكثر من موديل + الأداء المقيس
 
@@ -98,7 +96,7 @@ README_TEXT = """# Final AI Test — النسخة المرجعية المستق�
   **متسلسلة** على نفس الـ runner وبنفس الإعدادات الثابتة، وكل أقسام التقرير (كارت لكل
   موديل · البصمة السداسية · رسوم المقارنة · جدول السرعة لكل سؤال · شيت `SpeedDetail`)
   بتغطيهم جنب بعض. الحد العمقي ≈ 5 موديلات في 6 ساعات.
-- **الأداء:** شيت `Performance` في الـ Excel وقسم «⚡ الأداء الحقيقي المقيس» في الـ HTML
+- **الأداء:** شيت `Performance` في الـ Excel وقسم «الأداء المقيس» في الـ HTML
   بيعرضوا أرقام **مقيسة فعلياً** (من `timings` الخاص بـ llama.cpp + أوقات الطلبات).
   أرقام «الملاءمة» (سقف tg/pp) **نظرية** — للمقارنة والتخطيط بس.
 - **فحص منافسة الكارت:** الأداة بتفحص قبل كل موديل لو فيه `llama-server` / `ollama` تاني
@@ -108,7 +106,7 @@ README_TEXT = """# Final AI Test — النسخة المرجعية المستق�
 ## ملاحظات
 
 - التصحيح **حتمي 100%**: نفس الإجابات ⇒ نفس الدرجات دائماً (مفيش LLM-judge).
-- درجة المقارنة: `paper` هي المقياس الصارم · `baseline` هو المقياس المنشور (61.6).
+- **مرجع Gemini 2.5 Pro = عرض فقط ⛔**: مالوش أي تأثير في الدرجة ولا الحكم ولا بوابات الحد الأدنى.
 - مجلد الأداة الأصلي بيفضل مكانه في المجلد الأب — النسخة دي **نسخة مرجعية** مش بديل.
 """
 
@@ -184,8 +182,10 @@ def main() -> int:
         "",
         "```bash",
         "# تحقق إن كل ملف في النسخة مطابق لبصمة SHA-256 في الـ MANIFEST",
-        "python scripts/verify_manifest.py",
+        "python scripts/verify_manifest.py .",
         "```",
+        "",
+        "(أو من جذر المشروع: `python scripts/verify_manifest.py \"dist/Final AI Test\"`)",
         "",
         "أو يدوياً:",
         "",

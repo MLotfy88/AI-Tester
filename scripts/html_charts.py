@@ -1,26 +1,33 @@
-"""الرسوم البيانية وسجل الإجابات الكامل لتقرير HTML.
+"""الرسوم البيانية وسجل الإجابات الكامل لتقرير HTML (الامتحان v3).
 
 كل الرسوم هنا **SVG خالص** مولّد من Python:
   · مفيش Chart.js ولا CDN ولا أي ملف خارجي — التقرير ملف واحد مستقل.
-  · الرسم السداسي (Hexagon/Radar) لمقارنة الموديلات على 6 محاور.
-  · جدول الفروق عن خط الأساس (بار تفاضلي) — أداة القرار السريعة.
-  · سجل الإجابات: نص السؤال + نص التفكير + نص الإجابة لكل موديل.
+  · الرسم السداسي (Radar) لكل نموذج: 8 محاور + المجموع.
+  · جدول الفروق عن **مرجع Gemini (عرض فقط)** — أداة مقارنة سريعة.
+  · سجل الإجابات: نص السؤال + نص الإجابة + ملاحظات المصحح لكل موديل.
+
+⚠ كل عنصر يخص مرجع Gemini بياخد class `gem-ref` ⇒ زر «إظهار/إخفاء المرجع»
+بيتحكم فيه من الـ CSS (`html[data-gem="off"] .gem-ref{display:none}`)
+فيختفي **من الجداول والرسوم والبطاقات والنصوص** معاً، والاختيار بيتحفظ في localStorage.
 """
 from __future__ import annotations
 
 import html
+import json
 import math
-import re
 from typing import Any
 
 from common import human_bytes
 from references import (
-    TARGET_COLOR,
+    GEMINI_COLOR,
+    category_short,
+    gemini_gap,
+    gemini_radar_values,
+    gemini_ranking,
+    gemini_reference,
+    gemini_total,
+    gemini_values,
     source_badge,
-    target_config,
-    target_gap,
-    target_radar_values,
-    target_ranking,
 )
 
 # --------------------------------------------------------------------------- ثابت
@@ -29,17 +36,8 @@ CHART_COLORS = [
     "#a78bfa", "#f472b6", "#2dd4bf", "#facc15", "#c084fc",
 ]
 
-# أبعاد الرسم السداسي (6 محاور ⇒ سداسي حقيقي)
-RADAR_DIMS: tuple[tuple[str, str], ...] = (
-    ("1", "① اللهجة"),
-    ("2", "② الأمانة"),
-    ("3", "③ الشغل"),
-    ("4", "④ المهارات"),
-    ("total", "المجموع"),
-    ("ar", "نسبة العامية"),
-)
-
-AXIS_LABELS = ("① اللهجة", "② الأمانة", "③ الشغل", "④ المهارات")
+#: class موحّد لكل عنصر يخص مرجع Gemini (عرض فقط)
+GEM_CLASS = "gem-ref"
 
 
 # --------------------------------------------------------------------------- أدوات
@@ -63,6 +61,26 @@ def _num(value: Any, digits: int = 2) -> str:
         return "—"
 
 
+def Path_name(path: str) -> str:
+    """اسم الملف من مسار (Windows/Posix)."""
+    text = str(path).replace("\\", "/")
+    return text.rsplit("/", 1)[-1] if "/" in text else text
+
+
+def _ok_models(results: list[dict]) -> list[dict]:
+    return [r for r in results if r.get("status") == "ok" and r.get("exam")]
+
+
+def radar_dims(exam_cfg: dict) -> list[tuple[str, str]]:
+    """أبعاد الرسم السداسي: 8 محاور + المجموع."""
+    dims: list[tuple[str, str]] = [
+        (str(key), category_short(exam_cfg, key))
+        for key in (exam_cfg.get("categories") or {}).keys()
+    ]
+    dims.append(("total", "المجموع"))
+    return dims
+
+
 # --------------------------------------------------------------------------- الرسم السداسي
 def _radar_coords(values: list[float], cx: float, cy: float, radius: float) -> list[tuple[float, float]]:
     n = len(values)
@@ -78,110 +96,33 @@ def _radar_polygon(values: list[float], cx: float, cy: float, radius: float) -> 
     return " ".join(f"{x:.1f},{y:.1f}" for x, y in _radar_coords(values, cx, cy, radius))
 
 
-def radar_values(exam: dict | None, axes_cfg: dict) -> list[float]:
+def radar_values(exam: dict | None, exam_cfg: dict) -> list[float]:
     """قيم الموديل على أبعاد الرسم السداسي (كلها من 0 إلى 100)."""
     exam = exam or {}
-    axes = exam.get("axes") or {}
+    categories = exam.get("categories") or {}
     values: list[float] = []
-    for key, _label in RADAR_DIMS:
+    for key, _label in radar_dims(exam_cfg):
         if key == "total":
             values.append(float(exam.get("total") or 0.0))
-        elif key == "ar":
-            values.append(float(exam.get("ar_ratio") or 0.0) * 100.0)
         else:
-            axis = axes.get(key) or {}
-            maxv = axis.get("max") or (axes_cfg.get(key) or {}).get("max")
-            values.append(_pct(axis.get("score"), maxv) or 0.0)
+            row = categories.get(key) or {}
+            values.append(float(row.get("percent") or 0.0))
     return values
-
-
-def baseline_radar_values(base: dict | None, axes_cfg: dict, models: list[dict]) -> list[float]:
-    """قيم خط الأساس — نسبة العامية بتجيبها من ناتج التصحيح لو موجودة."""
-    base = base or {}
-    base_axes = base.get("axes") or {}
-    ar_ratio = base.get("ar_ratio")
-    if ar_ratio is None:
-        for result in models:
-            exam = result.get("exam") or {}
-            ar_ratio = (exam.get("baseline") or {}).get("ar_ratio")
-            if ar_ratio is not None:
-                break
-    values: list[float] = []
-    for key, _label in RADAR_DIMS:
-        if key == "total":
-            values.append(float(base.get("total") or 0.0))
-        elif key == "ar":
-            values.append(float(ar_ratio or 0.0) * 100.0)
-        else:
-            maxv = (axes_cfg.get(key) or {}).get("max")
-            values.append(_pct(base_axes.get(key), maxv) or 0.0)
-    return values
-
-
-def _model_key(name: str) -> str:
-    """مفتاح تطبيع لاسم الموديل — للمقارنة بدون ترقيم ولا مسار ولا لاحقة.
-
-    شيل أي تعليق بين قوسين («خط الأساس» · «مقاس آلياً» · «baseline») عشان
-    الاسم البسيط (اسم الملف) هو اللي بيتقارن.
-    """
-    text = Path_name(str(name or ""))
-    text = re.sub(r"\.gguf$", "", text, flags=re.I)
-    text = re.sub(r"\s*\([^)]*\)\s*", " ", text)
-    text = re.sub(r"[^0-9A-Za-z\u0600-\u06FF]+", "_", text.strip().lower())
-    return text.strip("_")
-
-
-def measured_baseline_model(
-    results: list[dict], exam_cfg: dict
-) -> tuple[dict | None, str]:
-    """يلاقي الموديل المرجعي **المقاس فعلاً في نفس التشغيل** (مش المنشور).
-
-    لو الموديل الأساس (Qwen3.5-4B) موجود ضمن الموديلات اللي اتقست، نستخدم أرقامه
-    المقاسة (بنفس السياسة ⇒ مقارنة صحيحة 100%). وإلا نرجع للمنشور ونقول إن كده.
-
-    المطابقة بثلاث طرق (من الأقوى للأدق):
-      1. الاسم فيه علامة «خط الأساس» صراحةً.
-      2. **اسم الملف بعد التطبيع** (نفس الـ repo + نفس الـ quant) — ده اللي بيخلّي
-         الموديل المحلي `...\\Qwen3.5-4B-IQ4_XS.gguf` يتعرّف عليه.
-      3. الدرجة المنشورة (61.6) — fallback قديم.
-    """
-    base = _baseline(exam_cfg)
-    base_name = str(base.get("name") or "")
-    base_total = float(base.get("total") or 0.0)
-    if not base_name:
-        return None, ""
-    base_key = _model_key(base_name)
-    for result in results:
-        if not result.get("exam"):
-            continue
-        name = str(result.get("model") or "")
-        model_key = _model_key(name)
-        is_baseline = "خط الأساس" in name or name.endswith("(baseline)")
-        if not is_baseline and base_key and model_key and model_key == base_key:
-            is_baseline = True
-        if not is_baseline and base_total:
-            total = float((result.get("exam") or {}).get("total") or 0.0)
-            if abs(total - base_total) < 0.01:
-                is_baseline = True
-        if is_baseline:
-            return result, "مقاس في هذا التشغيل"
-    return None, "منشور في ورقة الامتحان §0.6"
 
 
 def radar_svg(
     series: list[dict],
-    baseline_values: list[float] | None,
-    target_values: list[float] | None = None,
-    target_label: str = "الهدف",
+    dims: list[tuple[str, str]],
+    gemini_values: list[float] | None = None,
+    gemini_label: str = "مرجع Gemini 2.5 Pro",
 ) -> str:
-    """رسم SVG سداسي: كل موديل مضلّع + خط الأساس المتقطّع + الهدف.
+    """رسم SVG: كل موديل مضلّع + مرجع Gemini (منقّط بنفسجي، عرض فقط).
 
-    · خط الأساس (المقاس آلياً / المنشور) = متقطّع كهرماني.
-    · الهدف (Gemini 2.5 Pro)        = بنفسجي منقّط (مصدره معلن في الـlegend).
+    مرجع Gemini ملفوف في `<g class="gem-ref">` ⇒ اختفاؤه بيخفيه من الرسم كله.
     """
-    width, height = 560, 450
-    cx, cy, radius = 280, 220, 155
-    n = len(RADAR_DIMS)
+    width, height = 620, 500
+    cx, cy, radius = 310, 245, 165
+    n = len(dims)
     out = [
         '<svg class="radar-svg" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" '
         'role="img" aria-label="مقارنة سداسية بين الموديلات">' % (width, height)
@@ -190,13 +131,13 @@ def radar_svg(
         pts = _radar_polygon([float(level)] * n, cx, cy, radius)
         cls = "radar-ring" + (" outer" if level == 100 else "")
         out.append(f'<polygon class="{cls}" points="{pts}"/>')
-    for i, (_key, label) in enumerate(RADAR_DIMS):
+    for i, (_key, label) in enumerate(dims):
         angle = math.radians(-90 + i * 360.0 / n)
         x = cx + radius * math.cos(angle)
         y = cy + radius * math.sin(angle)
         out.append(f'<line class="radar-spoke" x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}"/>')
-        lx = cx + (radius + 36) * math.cos(angle)
-        ly = cy + (radius + 36) * math.sin(angle)
+        lx = cx + (radius + 38) * math.cos(angle)
+        ly = cy + (radius + 38) * math.sin(angle)
         anchor = "middle"
         if math.cos(angle) > 0.25:
             anchor = "start"
@@ -208,26 +149,20 @@ def radar_svg(
     for level in (20, 40, 60, 80, 100):
         y = cy - radius * level / 100.0
         out.append(f'<text class="radar-tick" x="{cx + 5}" y="{y + 3:.1f}">{level}</text>')
-    if baseline_values:
-        pts = _radar_polygon(baseline_values, cx, cy, radius)
-        out.append(
-            '<polygon class="radar-baseline" points="%s"><title>المرجع الإضافي (مصدره معلن في الأسفل)</title></polygon>'
-            % pts
-        )
-    if target_values:
-        pts = _radar_polygon(target_values, cx, cy, radius)
+    if gemini_values:
+        pts = _radar_polygon(gemini_values, cx, cy, radius)
         dots = "".join(
             f'<circle class="radar-target-dot" cx="{x:.1f}" cy="{y:.1f}" r="3.2"/>'
-            for x, y in _radar_coords(target_values, cx, cy, radius)
+            for x, y in _radar_coords(gemini_values, cx, cy, radius)
         )
         out.append(
-            f'<g class="radar-target"><title>{esc(target_label)} — الهدف (مصدره معلن في الأسفل)</title>'
+            f'<g class="{GEM_CLASS} radar-target"><title>{esc(gemini_label)} — مرجع عرض فقط</title>'
             f'<polygon class="radar-target-poly" points="{pts}"/>{dots}</g>'
         )
     for idx, item in enumerate(series):
         pts = _radar_polygon(item["values"], cx, cy, radius)
         tip = item["model"] + " — " + " · ".join(
-            f"{label}: {value:.1f}" for (_k, label), value in zip(RADAR_DIMS, item["values"])
+            f"{label}: {value:.1f}" for (_k, label), value in zip(dims, item["values"])
         )
         dots = "".join(
             f'<circle class="radar-dot" cx="{x:.1f}" cy="{y:.1f}" r="3.6"/>'
@@ -242,8 +177,30 @@ def radar_svg(
     return "".join(out)
 
 
-# --------------------------------------------------------------------------- فرق عن الأساس
-def _delta_cell(delta: float, maximum: float) -> str:
+# --------------------------------------------------------------------------- أفضل محور
+def category_winners(results: list[dict], exam_cfg: dict) -> str:
+    """«الأفضل في كل محور» — أسرع طريقة للقرار."""
+    chips: list[str] = []
+    for key in (exam_cfg.get("categories") or {}).keys():
+        label = category_short(exam_cfg, key)
+        best = None
+        best_pct = -1.0
+        for result in _ok_models(results):
+            row = ((result.get("exam") or {}).get("categories") or {}).get(key) or {}
+            pct = row.get("percent")
+            if isinstance(pct, (int, float)) and float(pct) > best_pct:
+                best, best_pct = result, float(pct)
+        if best is None:
+            continue
+        chips.append(
+            f'<span class="winner"><b>{esc(label)}</b><span class="winner-model">{esc(best.get("model"))}</span>'
+            f'<span class="num" dir="ltr">{_num(best_pct, 1)}%</span></span>'
+        )
+    return "".join(chips)
+
+
+# --------------------------------------------------------------------------- فرق عن مرجع Gemini
+def _delta_cell(delta: float, maximum: float = 100.0) -> str:
     cls = "up" if delta > 0 else ("down" if delta < 0 else "mut")
     sign = "+" if delta > 0 else ""
     width = min(50.0, abs(delta) / maximum * 50.0) if maximum else 0.0
@@ -255,155 +212,103 @@ def _delta_cell(delta: float, maximum: float) -> str:
     )
 
 
-def delta_matrix(results: list[dict], exam_cfg: dict) -> str:
-    """جدول الفروق عن خط الأساس: سطر لكل موديل، عمود لكل محور.
+def gemini_delta_matrix(results: list[dict], exam_cfg: dict) -> str:
+    """جدول فرق النسبة عن مرجع Gemini — لكل محور + المسافة.
 
-    خط الأساس هنا = **الموديل المرجعي المقاس في نفس التشغيل** لو موجود
-    (⇒ مقارنة على نفس السياسة وعلى نفس الجهاز ⇒ صحيحة 100%).
-    وإلا = الأرقام المنشورة في ورقة الامتحان §0.6.
+    ⚠ كل الجدول `gem-ref` ⇒ بيختفي مع إطفاء المرجع.
     """
-    axes_cfg = exam_cfg.get("axes") or {}
-    measured, base_source = measured_baseline_model(results, exam_cfg)
-    if measured:
-        base_exam = measured.get("exam") or {}
-        base_total = float(base_exam.get("total") or 0.0)
-        base_axes = {
-            k: float((base_exam.get("axes") or {}).get(k, {}).get("score") or 0.0)
-            for k in ("1", "2", "3", "4")
-        }
-        base_name = str(measured.get("model") or "المرجع الإضافي")
-    else:
-        published = _baseline(exam_cfg)
-        base_total = float(published.get("total") or 0.0)
-        base_axes = {k: float(v) for k, v in (published.get("axes") or {}).items()}
-        base_name = str(published.get("name") or "المرجع الإضافي")
-
+    keys = list((exam_cfg.get("categories") or {}).keys())
+    reference = gemini_values(exam_cfg)
     rows: list[str] = []
     for result in _ok_models(results):
-        if measured and result is measured:
-            continue
         exam = result.get("exam") or {}
-        axes = exam.get("axes") or {}
-        cells: list[str] = []
-        for key in ("1", "2", "3", "4"):
-            maxv = float((axes_cfg.get(key) or {}).get("max") or 0.0)
-            model_score = float((axes.get(key) or {}).get("score") or 0.0)
-            base_score = float(base_axes.get(key) or 0.0)
-            cells.append(_delta_cell(model_score - base_score, maxv))
-        total = float(exam.get("total") or 0.0)
-        cells.append(_delta_cell(total - base_total, 100.0))
+        gap = gemini_gap(exam, exam_cfg)
+        cells = "".join(
+            f"<td>{_delta_cell(gap['per_axis'].get(key, 0.0))}</td>" for key in keys
+        )
+        distance = gap.get("distance")
         rows.append(
             f'<tr><td class="model-cell"><div class="model-name">{esc(result.get("model"))}</div>'
-            f'<div class="mut small num" dir="ltr">{_num(total, 2)}/100</div></td>'
-            + "".join(f"<td>{cell}</td>" for cell in cells)
-            + "</tr>"
+            f'<div class="mut small num" dir="ltr">{_num(exam.get("total"), 2)}/100</div></td>'
+            + cells
+            + f'<td><span class="num dist-val" dir="ltr">{_num(distance, 1)}</span></td></tr>'
         )
-    if base_total:
-        zeros = "".join('<td><div class="delta-cell"><span class="dval mut num" dir="ltr">0.00</span>'
-                        '<span class="dtrack"></span></div></td>' for _ in range(5))
+    if reference:
+        zeros = "".join(
+            '<td><div class="delta-cell"><span class="dval mut num" dir="ltr">0.00</span>'
+            '<span class="dtrack"></span></div></td>'
+            for _ in keys
+        )
         rows.append(
-            f'<tr class="baseline-row"><td class="model-cell"><div class="model-name">{esc(base_name)}</div>'
-            f'<div class="mut small">المرجع الإضافي · {esc(base_source)}</div></td>{zeros}</tr>'
+            f'<tr class="target-row"><td class="model-cell"><div class="model-name">🎯 '
+            f'{esc(gemini_reference(exam_cfg).get("name") or "مرجع Gemini")}</div>'
+            f'<div class="mut small">مرجع عرض فقط — {esc(source_badge(gemini_reference(exam_cfg)))}</div></td>'
+            f"{zeros}<td>—</td></tr>"
         )
-
-    note = (
-        "الفروق محسوبة **نفس الموديل المرجعي المقاس في نفس التشغيل** "
-        "⇒ المقارنة على نفس السياسة ونفس الجهاز."
-        if measured
-        else "الفروق محسوبة مقابل الأرقام **المنشورة** في ورقة الامتحان §0.6 "
-        "(مقياس baseline — اقرأ §مبدأ المقارنة)."
-    )
+    head = "".join(f"<th>Δ {esc(category_short(exam_cfg, key))}</th>" for key in keys)
     return f"""
 <div class="table-wrap">
   <table class="tbl compact delta-tbl">
-    <thead><tr><th>الموديل</th><th>Δ ① اللهجة</th><th>Δ ② الأمانة</th><th>Δ ③ الشغل</th>
-      <th>Δ ④ المهارات</th><th>Δ المجموع</th></tr></thead>
-    <tbody>{''.join(rows) or '<tr><td colspan="6" class="mut">مفيش نتائج.</td></tr>'}</tbody>
+    <thead><tr><th>الموديل</th>{head}<th>المسافة</th></tr></thead>
+    <tbody>{''.join(rows) or '<tr><td colspan="10" class="mut">مفيش نتائج.</td></tr>'}</tbody>
   </table>
 </div>
-<p class="mut small delta-note">{note}</p>
+<p class="mut small delta-note">Δ = فرق النسبة عن مرجع Gemini (بالنقاط %) — موجب = أعلى من المرجع.
+  <b>المسافة</b> = متوسط |Δ| على المحاور الثمانية · <b>الأقل = الأقرب</b>.
+  ⛔ المرجع **عرض فقط** — مالوش أي تأثير في الدرجة ولا الحكم.</p>
 """
 
 
-def axis_winners(results: list[dict], exam_cfg: dict) -> str:
-    """«الأفضل في كل محور» — أسرع طريقة للقرار."""
-    axes_cfg = exam_cfg.get("axes") or {}
-    chips: list[str] = []
-    for key, label in (("1", "① اللهجة"), ("2", "② الأمانة"), ("3", "③ الشغل"), ("4", "④ المهارات")):
-        best = None
-        best_score = -1.0
-        for result in _ok_models(results):
-            axis = ((result.get("exam") or {}).get("axes") or {}).get(key) or {}
-            score = float(axis.get("score") or 0.0)
-            if score > best_score:
-                best, best_score = result, score
-        if best is None:
-            continue
-        maxv = float((axes_cfg.get(key) or {}).get("max") or 0.0)
-        pct = _pct(best_score, maxv) or 0.0
-        chips.append(
-            f'<span class="winner"><b>{esc(label)}</b><span class="winner-model">{esc(best.get("model"))}</span>'
-            f'<span class="num" dir="ltr">{_num(best_score, 1)}/{_num(maxv, 0)} ({_num(pct, 0)}%)</span></span>'
-        )
-    return "".join(chips)
-
-
-# --------------------------------------------------------------------------- الأقسام
-def target_ranking_table(results: list[dict], exam_cfg: dict) -> str:
-    """«🎯 الأقرب للهدف» — ترتيب الموديلات من الأقرب للهدف للأبعد.
-
-    **المسافة** = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً).
-    الأرقام المقروءة من `config/exam.yaml → target` (معايرة يدوية).
-    """
-    target = target_config(exam_cfg)
-    if not target:
-        return '<p class="mut small">مفيش شريط هدف معرّف في الإعدادات.</p>'
-    ranked = target_ranking(results, exam_cfg)
+def gemini_ranking_table(results: list[dict], exam_cfg: dict) -> str:
+    """«🎯 الأقرب لمرجع Gemini» — ترتيب من الأقرب للأبعد."""
+    ref = gemini_reference(exam_cfg)
+    if not ref:
+        return '<p class="mut small">مفيش مرجع معرّف في الإعدادات.</p>'
+    ranked = gemini_ranking(results, exam_cfg)
     if not ranked:
         return '<p class="mut small">مفيش نتائج.</p>'
+    keys = list((exam_cfg.get("categories") or {}).keys())
     rows: list[str] = []
     for i, row in enumerate(ranked, 1):
         result = row["result"]
         gap = row["gap"]
         exam = result.get("exam") or {}
         distance = float(row["distance"])
-        # كل ما المسافة قلّت ⇒ الشريط يمتلئ أكتر (قرب أعلى)
         near = max(0.0, min(1.0, 1.0 - distance / 100.0))
         cells = "".join(
-            f'<td class="num" dir="ltr">{_num(gap["axis_pct"].get(k), 1)}</td>'
-            for k in ("1", "2", "3", "4")
+            f'<td class="num" dir="ltr">{_num(gap["per_axis"].get(key), 1)}</td>' for key in keys
         )
         rows.append(
             f'<tr><td class="rank num" dir="ltr">{i}</td>'
             f'<td class="model-cell"><div class="model-name" title="{esc(result.get("model_full") or result.get("model"))}">{esc(result.get("model"))}</div></td>'
             f'<td class="num" dir="ltr">{_num(exam.get("total"), 1)}</td>'
             f"{cells}"
-            f'<td class="num" dir="ltr">{_num(gap["total"], 1)}</td>'
             f'<td><span class="dist-bar" title="المسافة {distance:.1f}">'
             f'<i style="width:{near * 100:.1f}%"></i></span>'
             f'<span class="num dist-val" dir="ltr">{_num(distance, 1)}</span></td></tr>'
         )
+    head = "".join(f"<th>Δ {esc(category_short(exam_cfg, key))}</th>" for key in keys)
     return f"""
 <div class="table-wrap">
   <table class="tbl compact target-tbl">
-    <thead><tr><th>#</th><th>الموديل</th><th>المجموع</th>
-      <th>Δ ① %</th><th>Δ ② %</th><th>Δ ③ %</th><th>Δ ④ %</th>
-      <th>Δ المجموع</th><th>المسافة (قرب)</th></tr></thead>
+    <thead><tr><th>#</th><th>الموديل</th><th>المجموع</th>{head}<th>المسافة (قرب)</th></tr></thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
 </div>
-<p class="mut small delta-note">Δ = فرق النسبة عن الهدف <b>{esc(str(target.get("name") or ""))}</b>
-  (<span class="pill target">{esc(source_badge(target))}</span>) — موجب = أعلى من الهدف.
-  <b>المسافة</b> = متوسط |Δ| على المحاور الأربعة · الأقل = الأقرب.</p>
+<p class="mut small delta-note">Δ = فرق النسبة عن <b>{esc(str(ref.get("name") or ""))}</b>
+  (<span class="pill target">{esc(source_badge(ref))}</span>) — موجب = أعلى من المرجع.
+  <b>المسافة</b> = متوسط |Δ| على المحاور الثمانية · الأقل = الأقرب.
+  ⛔ <b>عرض فقط</b> — لا يدخل في درجة أي نموذج ولا في الحكم.</p>
 """
 
 
+# --------------------------------------------------------------------------- الرسم السداسي (القسم)
 def radar_section(results: list[dict], exam_cfg: dict) -> str:
     """قسم الرسم السداسي + لوحة القرار."""
     models = _ok_models(results)
     if not models:
         return ""
-    axes_cfg = exam_cfg.get("axes") or {}
+    dims = radar_dims(exam_cfg)
     series: list[dict] = []
     for i, result in enumerate(models):
         exam = result.get("exam") or {}
@@ -411,31 +316,18 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
             {
                 "id": f"s{i}",
                 "model": result.get("model") or f"موديل {i + 1}",
-                "values": radar_values(exam, axes_cfg),
+                "values": radar_values(exam, exam_cfg),
                 "color": CHART_COLORS[i % len(CHART_COLORS)],
                 "total": exam.get("total"),
                 "verdict": exam.get("verdict"),
             }
         )
 
-    # ── خط الأساس: الموديل المرجعي **المقاس في نفس التشغيل** لو موجود،
-    #    وإلا الأرقام المنشورة. المهم: نعرف المستخدم مصدر الخط ده.
-    published = _baseline(exam_cfg)
-    measured, base_source = measured_baseline_model(results, exam_cfg)
-    if measured:
-        base_values = radar_values(measured.get("exam") or {}, axes_cfg)
-        base_label = str(measured.get("model") or "المرجع الإضافي")
-        base_total = (measured.get("exam") or {}).get("total")
-    else:
-        base_values = baseline_radar_values(published, axes_cfg, models)
-        base_label = str(published.get("name") or "المرجع الإضافي")
-        base_total = published.get("total")
-
-    # ── الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بيبان في كل رسم
-    target = target_config(exam_cfg)
-    target_values = target_radar_values(target, axes_cfg) if target else None
-    target_total = target.get("total")
-    svg = radar_svg(series, base_values, target_values, str(target.get("name") or "الهدف"))
+    ref = gemini_reference(exam_cfg)
+    ref_values = gemini_radar_values(exam_cfg, [k for k, _ in dims if k != "total"])
+    # المجموع مش رقم مرجعي (Gemini مش مقاس ب rubricنا) ⇒ بنخليه 0 في الرسم
+    ref_values = list(ref_values) + [0.0] if ref_values else None
+    svg = radar_svg(series, dims, ref_values, str(ref.get("name") or "مرجع Gemini"))
 
     legend = "".join(
         f'<button type="button" class="legend-chip" data-series="{item["id"]}" style="--c:{item["color"]}">'
@@ -443,216 +335,62 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
         f'<span class="lc-total num" dir="ltr">{_num(item["total"], 1)}</span></button>'
         for item in series
     )
-    base_badge = "مقاس في هذا التشغيل" if measured else "منشور (§0.6)"
-
-    # ── شرائح المراجع في الـlegend: خط الأساس + الهدف
-    target_chip = ""
-    if target:
-        target_chip = (
-            f'<span class="legend-chip target" title="{esc(str(target.get("note") or ""))}">'
-            f'<i class="dot"></i><span class="lc-name">{esc(target.get("name") or "الهدف")}</span>'
-            f'<span class="lc-total num" dir="ltr">{_num(target_total, 1)}</span>'
-            f'<span class="lc-badge">{esc(source_badge(target))}</span></span>'
+    gem_chip = ""
+    if ref:
+        gem_chip = (
+            f'<span class="legend-chip target {GEM_CLASS}" title="{esc(str(ref.get("note") or ""))}">'
+            f'<i class="dot"></i><span class="lc-name">{esc(ref.get("name") or "مرجع Gemini")}</span>'
+            f'<span class="lc-badge">{esc(source_badge(ref))}</span></span>'
         )
+
+    ref_total = gemini_total(exam_cfg)
+    ref_note = (
+        f'<div class="base-source target-src {GEM_CLASS}">'
+        f'<b>المرجع في الرسم:</b> {esc(str(ref.get("name") or ""))} — '
+        f'<span class="pill target">{esc(source_badge(ref))}</span>'
+        f'<div class="mut small">متوسط التقدير المرجعي: {_num(ref_total, 1)}/100 '
+        f'(متوسط بسيط على المحاور الثمانية — <b>مش درجة rubric</b>).</div>'
+        f'<div class="mut small">{esc(str(ref.get("note") or ""))}</div></div>'
+        if ref
+        else ""
+    )
 
     return f"""
 <section class="section" id="radar">
   <div class="section-head">
     <div><h2>⬡ البصمة السداسية للموديلات</h2>
-      <p class="sub">كل مضلّع = موديل واحد على 6 محاور (اللهجة، الأمانة، الشغل، المهارات، المجموع، نسبة العامية).
-      مرّر الماوس على أي مضلّع لتشوف أرقامه. المتقطّع الكهرماني = المرجع الإضافي، والمنقّط البنفسجي = الهدف (Gemini 2.5 Pro).</p></div>
+      <p class="sub">كل مضلّع = موديل واحد على 8 محاور + المجموع (كلها 0–100).
+      مرّر الماوس على أي مضلّع لتشوف أرقامه.
+      <span class="{GEM_CLASS}">والمنقّط البنفسجي = مرجع Gemini 2.5 Pro (عرض فقط ⛔ — مالوش تأثير في الدرجة ولا الحكم).</span></p></div>
   </div>
   <div class="radar-layout">
     <div class="card radar-card">
       {svg}
-      <div class="legend-chips">{legend}
-        <span class="legend-chip base" title="المرجع الإضافي: {esc(base_source)}"><i class="dot"></i>
-          <span class="lc-name">المرجع الإضافي</span>
-          <span class="lc-total num" dir="ltr">{_num(base_total, 1)}</span></span>
-        {target_chip}
-      </div>
-      <div class="base-source">
-        <b>المرجع الإضافي في الرسم:</b> {esc(base_label)} — <span class="pill muted">{esc(base_badge)}</span>
-        <div class="mut small">{esc(base_source)}</div>
-      </div>
-      {f'<div class="base-source target-src"><b>الهدف في الرسم:</b> {esc(str(target.get("name") or ""))} — <span class="pill target">{esc(source_badge(target))}</span><div class="mut small">{esc(str(target.get("note") or ""))}</div></div>' if target else ''}
+      <div class="legend-chips">{legend}{gem_chip}</div>
+      {ref_note}
     </div>
     <div class="decision-panel">
       <div class="card">
         <h3 class="panel-title">🏅 الأفضل في كل محور</h3>
-        <div class="winners">{axis_winners(results, exam_cfg) or '<span class="mut">مفيش نتائج.</span>'}</div>
+        <div class="winners">{category_winners(results, exam_cfg) or '<span class="mut">مفيش نتائج.</span>'}</div>
       </div>
-      <div class="card">
-        <h3 class="panel-title">📏 الفرق عن المرجع الإضافي (نقاط)</h3>
-        <p class="mut small">الأخضر = أعلى من الأساس · الأحمر = أقل. النص = الفرق بالنقاط من 100.</p>
-        {delta_matrix(results, exam_cfg)}
+      <div class="card {GEM_CLASS}">
+        <h3 class="panel-title">🎯 الفرق عن مرجع Gemini (نقاط %)</h3>
+        <p class="mut small">الأخضر = أعلى من المرجع · الأحمر = أقل. النص = الفرق بالنقاط من 100.</p>
+        {gemini_delta_matrix(results, exam_cfg)}
       </div>
-      <div class="card">
-        <h3 class="panel-title">🎯 الأقرب للهدف ({esc(str(target.get("name") or "الهدف"))})</h3>
-        <p class="mut small">المسافة = متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً). **الأقل = الأقرب للهدف.**</p>
-        {target_ranking_table(results, exam_cfg)}
+      <div class="card {GEM_CLASS}">
+        <h3 class="panel-title">🎯 الأقرب لمرجع Gemini ({esc(str(ref.get("name") or "مرجع Gemini"))})</h3>
+        <p class="mut small">المسافة = متوسط فرق النسبة على المحاور الثمانية (٠ = مطابق تماماً). <b>الأقل = الأقرب.</b></p>
+        {gemini_ranking_table(results, exam_cfg)}
       </div>
       <div class="card note">
-        <b>طريقة القراءة:</b> لو المضلّع <b>داخلي</b> المرجع الإضافي ⇒ أضعف. لو خارجي ومساحة أكبر ⇒ أفضل.
-        ولو المضلّع مش متساوي ⇒ فيه محور ضعيف حتى لو المجموع عالي — وده بالظبط اللي بيفرق في القرار.
-        وقارن المضلّع بالمنقّط البنفسجي (الهدف) عشان تعرف قد إيه بقيت من الفجوة.
+        <b>طريقة القراءة:</b> لو المضلّع <b>مش متساوي</b> ⇒ فيه محور ضعيف حتى لو المجموع عالي —
+        وده بالظبط اللي بيفرق في القرار. وكل محور نزل عن حدّه الأدنى = <b>فشل حرج ⛔</b>
+        حتى لو المجموع عالي.
       </div>
     </div>
   </div>
-</section>
-"""
-
-
-def transcripts_section(results: list[dict], exam_cfg: dict) -> str:
-    """سجل الإجابات الكامل: نص السؤال + نص التفكير + نص الإجابة لكل موديل."""
-    models = _ok_models(results)
-    if not models:
-        return ""
-    questions = exam_cfg.get("questions") or []
-
-    blocks: list[str] = []
-    for m_index, result in enumerate(models):
-        exam = result.get("exam") or {}
-        qrows = exam.get("questions") or {}
-        items: list[str] = []
-        for q in questions:
-            qid = str(q.get("id"))
-            row = qrows.get(qid) or {}
-            prompt = str(row.get("prompt") or q.get("prompt") or "")
-            reasoning = str(row.get("reasoning") or "")
-            answer = str(row.get("answer") or "")
-            notes = "؛ ".join(row.get("notes") or [])
-            health = "، ".join(row.get("health") or [])
-            blob = " ".join(
-                [qid, str(q.get("title") or ""), prompt, reasoning, answer, notes, str(result.get("model") or "")]
-            ).lower()
-            think_block = (
-                f'<div class="tr-text think">{esc(reasoning)}</div>'
-                if reasoning
-                else '<div class="tr-text think muted">— لا يوجد نص تفكير: التشغيل بوضع بلا تفكير '
-                '(enable_thinking=false) حسب ورقة الامتحان §0.1 —</div>'
-            )
-            if reasoning and not row.get("think_visible"):
-                think_block += (
-                    '<div class="tr-note">↳ النص ده رجع في قناة reasoning_content منفصلة '
-                    "(مش ظاهر للمستخدم) — مش محتسب ضمن G5 حسب ورقة الامتحان §52.</div>"
-                )
-            answer_block = (
-                f'<div class="tr-text answer">{esc(answer)}</div>'
-                if answer
-                else '<div class="tr-text answer bad">— رد فاضي (G6) —</div>'
-            )
-            items.append(
-                f"""
-<article class="tr-item" data-search="{esc(blob)}">
-  <header class="tr-head">
-    <span class="qid">{esc(qid)}</span>
-    <span class="tr-title">{esc(q.get("title"))}</span>
-    <span class="tr-axis">محور {esc(row.get("axis") or "—")}</span>
-    <span class="tr-score num" dir="ltr">{_num(row.get("score"), 1)}/{_num(row.get("max"), 0)}</span>
-  </header>
-  <div class="tr-meta">
-    <span>{esc(row.get("chars") or 0)} حرف</span>
-    <span>{esc(row.get("tokens") if row.get("tokens") is not None else "—")} توكن</span>
-    <span>{_num(row.get("seconds"), 1)} ث</span>
-    <span>{esc(row.get("finish") or "—")}</span>
-    {f'<span class="bad small">⚠ {esc(health)}</span>' if health else ""}
-  </div>
-  <div class="tr-part"><div class="tr-label">📝 نص السؤال</div><div class="tr-text q">{esc(prompt)}</div></div>
-  <div class="tr-part"><div class="tr-label">🧠 نص التفكير</div>{think_block}</div>
-  <div class="tr-part"><div class="tr-label">💬 نص الإجابة</div>{answer_block}</div>
-  {f'<div class="notes"><b>ملاحظات المصحح:</b> {esc(notes)}</div>' if notes else ""}
-  {f'<div class="notes bad">خطأ تشغيل: {esc(row.get("error"))}</div>' if row.get("error") else ""}
-</article>"""
-            )
-        total = exam.get("total")
-        blocks.append(
-            f"""
-<details class="card model-tr" data-model="m{m_index}" {'open' if m_index == 0 else ''}>
-  <summary>
-    <span class="ans-model">{esc(result.get("model"))}</span>
-    <span class="tr-total num" dir="ltr">{_num(total, 1)}/100</span>
-    <span class="verdict-mut mut small">{esc(exam.get("verdict") or "")}</span>
-    <span class="mut small">{len(items)} سؤال</span>
-  </summary>
-  <div class="tr-list">{''.join(items)}</div>
-</details>"""
-        )
-
-    return f"""
-<section class="section" id="transcripts">
-  <div class="section-head">
-    <div><h2>🗂 سجل الإجابات الكامل</h2>
-      <p class="sub">كل موديل: نص السؤال + نص التفكير + نص الإجابة كما وصل من الخادم —
-      عشان تراجع بنفسك العامية المصرية والجودة اللغوية قبل ما تقرر.</p></div>
-    <div class="tr-tools">
-      <input id="tr-search" type="search" placeholder="بحث في الأسئلة والتفكير والإجابات…">
-      <button type="button" class="btn" id="tr-expand">فتح الكل</button>
-      <button type="button" class="btn" id="tr-collapse">طي الكل</button>
-    </div>
-  </div>
-  <div class="tr-models">{''.join(blocks)}</div>
-</section>
-"""
-
-
-# --------------------------------------------------------------------------- إعدادات الموديلات
-def settings_section(results: list[dict], exam_cfg: dict) -> str:
-    """الإعدادات الفعلية لكل موديل + تحذير لو اختلفت القوالب بين الموديلات."""
-    models = _ok_models(results)
-    if not models:
-        return ""
-    rows: list[str] = []
-    templates: dict[str, str] = {}
-    for result in models:
-        st = result.get("settings") or {}
-        runtime = result.get("runtime") or {}
-        template = str(st.get("chat_template") or runtime.get("template") or "—")
-        templates[template] = template
-        rec = st.get("recommended_sampling") or {}
-        applied = st.get("applied") or []
-        warnings = st.get("warnings") or []
-        rows.append(
-            f"""
-<article class="card set-card">
-  <header class="set-head">
-    <div class="ans-model">{esc(result.get("model"))}</div>
-    <span class="pill muted">{esc(st.get("source") or "—")}</span>
-  </header>
-  <div class="set-grid">
-    <div class="set-k">القالب</div><div class="set-v" dir="ltr">{esc(Path_name(template))}</div>
-    <div class="set-k">مصدر القالب</div><div class="set-v">{esc(st.get("template_source") or runtime.get("template_mode") or "—")}</div>
-    <div class="set-k">KV cache</div><div class="set-v" dir="ltr">{esc(st.get("kv_cache_type") or runtime.get("kv") or "—")}</div>
-    <div class="set-k">flash-attn</div><div class="set-v" dir="ltr">{esc(st.get("flash_attn") or runtime.get("flash_attn") or "—")}</div>
-    <div class="set-k">ngl (offload)</div><div class="set-v num" dir="ltr">{esc(st.get("n_gpu_layers") if st.get("n_gpu_layers") is not None else runtime.get("ngl", "—"))}</div>
-    <div class="set-k">threads</div><div class="set-v num" dir="ltr">{esc(st.get("threads") if st.get("threads") is not None else runtime.get("threads", "—"))}</div>
-    <div class="set-k">device</div><div class="set-v" dir="ltr">{esc(st.get("device") or runtime.get("device") or "—")}</div>
-    <div class="set-k">Sampling مطبّق</div>
-    <div class="set-v num" dir="ltr">temp={esc(runtime.get("temperature", "—"))} · top_p={esc(runtime.get("top_p", "—"))} · seed={esc(runtime.get("seed", "—"))}</div>
-    <div class="set-k">توصيات المطوّر</div>
-    <div class="set-v">{" · ".join(f"{k}={v}" for k, v in rec.items()) or "—"}
-      <span class="mut small">[{esc(st.get("sampling_source") or "none")}]</span></div>
-  </div>
-  {f'<div class="notes"><b>مطبّق:</b> {esc(" · ".join(applied))}</div>' if applied else ""}
-  {f'<div class="notes bad"><b>تنبيهات:</b> {esc(" · ".join(warnings))}</div>' if warnings else ""}
-</article>"""
-        )
-    banner = ""
-    if len(templates) > 1:
-        banner = (
-            '<div class="card note warn-note"><b>⚠ تحذير قابلية المقارنة:</b> الموديلات استخدمت قوالب مختلفة '
-            f'({esc(" ، ".join(sorted(templates)))}). المقارنة بين الموديلات في هذه الحالة تقريبية — '
-            "للمقارنة المطلقة ثبّت <code>--template-mode exam</code> لكل الموديلات.</div>"
-        )
-    return f"""
-<section class="section" id="settings">
-  <div class="section-head">
-    <div><h2>⚙️ الإعدادات الفعلية لكل موديل</h2>
-      <p class="sub">اللي اتشغّل بيه فعلياً: قالب المحادثة، KV، offload، threads، device، وخلاصة الـ flags.
-      إعدادات الامتحان الثابتة (temp/seed/ctx) واحدة للجميع؛ الباقي ممكن يتغيّر حسب الموديل.</p></div>
-  </div>
-  {banner}
-  <div class="set-grid-cards">{''.join(rows)}</div>
 </section>
 """
 
@@ -682,25 +420,25 @@ def grouped_bar_svg(
     categories: list[str],
     series: list[dict],
     *,
-    width: int = 780,
-    height: int = 330,
+    width: int = 900,
+    height: int = 350,
     y_max: float = 100.0,
     y_suffix: str = "%",
 ) -> str:
     """أعمدة مجمّعة: كل مجموعة = محور، وكل لون = موديل.
 
-    series = [{"label": str, "color": str, "values": [float|None]}]
+    series = [{"label", "color", "values", "css_class"}]
+    كل سلسلة ملفوفة في `<g>` ⇒ لو السلسلة مرجع Gemini بنحطها `gem-ref` فتختفى مع الإطفاء.
     """
     if not categories or not series:
         return ""
-    pad_l, pad_r, pad_t, pad_b = 52, 14, 16, 54
+    pad_l, pad_r, pad_t, pad_b = 52, 14, 16, 60
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
     out = [
         f'<svg class="chart-svg" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
         f'role="img" aria-label="مقارنة الأعمدة">'
     ]
-    # المحور Y + الشبكة
     for level in range(0, 5):
         value = y_max * level / 4.0
         y = pad_t + plot_h - plot_h * (value / y_max if y_max else 0)
@@ -729,6 +467,10 @@ def grouped_bar_svg(
             x = gx + si * (bar_w + bar_gap)
             y = pad_t + plot_h - bar_h
             tip = f"{item.get('label')} · {category}: {v:.1f}{y_suffix}"
+            css = str(item.get("css_class") or "").strip()
+            out.append(
+                f'<g class="{esc(css)}">' if css else "<g>"
+            )
             out.append(
                 f'<rect class="ch-bar" x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" '
                 f'rx="3" fill="{esc(item.get("color"))}"><title>{esc(tip)}</title></rect>'
@@ -738,8 +480,9 @@ def grouped_bar_svg(
                     f'<text class="ch-val" x="{x + bar_w / 2:.1f}" y="{max(pad_t + 9, y - 4):.1f}" '
                     f'text-anchor="middle">{v:.0f}</text>'
                 )
+            out.append("</g>")
         out.append(
-            f'<text class="ch-label" x="{pad_l + group_w * gi + group_w / 2:.1f}" y="{height - pad_b + 18:.1f}" '
+            f'<text class="ch-label" x="{pad_l + group_w * gi + group_w / 2:.1f}" y="{height - pad_b + 20:.1f}" '
             f'text-anchor="middle">{esc(category)}</text>'
         )
     out.append("</svg>")
@@ -755,15 +498,12 @@ def scatter_svg(
     y_label: str = "",
     x_max: float | None = None,
     y_max: float = 100.0,
-    baseline_y: float | None = None,
-    target_y: float | None = None,
-    target_label: str = "الهدف",
+    gemini_y: float | None = None,
+    gemini_label: str = "مرجع Gemini",
 ) -> str:
-    """مخطط انتشار: الجودة (y) ضد الزمن/السرعة (x) — أداة القرار للمقارنة.
+    """مخطط انتشار: الدرجة (y) ضد زمن التشغيل (x).
 
-    خطان أفقيان مرجعيان:
-      · خط الأساس (كهرماني متقطّع).
-      · الهدف — Gemini 2.5 Pro (بنفسجي منقّط).
+    خط أفقي بنفسجي = مرجع Gemini (عرض فقط) — ملفوف في `<g class="gem-ref">`.
     """
     if not points:
         return ""
@@ -803,28 +543,20 @@ def scatter_svg(
     out.append(f'<line class="ch-axis" x1="{pad_l}" y1="{pad_t + plot_h}" x2="{width - pad_r}" y2="{pad_t + plot_h}"/>')
     out.append(f'<line class="ch-axis" x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t + plot_h}"/>')
 
-    if baseline_y is not None:
-        by = sy(float(baseline_y))
-        out.append(
-            f'<line class="ch-baseline" x1="{pad_l}" y1="{by:.1f}" x2="{width - pad_r}" y2="{by:.1f}">'
-            f"<title>المرجع الإضافي: {float(baseline_y):.1f}</title></line>"
-        )
-        out.append(
-            f'<text class="ch-base-label" x="{width - pad_r - 4}" y="{by - 6:.1f}" text-anchor="end">المرجع الإضافي</text>'
-        )
-
-    if target_y is not None:
-        ty = sy(float(target_y))
+    if gemini_y is not None:
+        ty = sy(float(gemini_y))
+        out.append(f'<g class="{GEM_CLASS}">')
         out.append(
             f'<line class="ch-target" x1="{pad_l}" y1="{ty:.1f}" x2="{width - pad_r}" y2="{ty:.1f}">'
-            f"<title>{esc(target_label)}: {float(target_y):.1f}</title></line>"
+            f"<title>{esc(gemini_label)}: {float(gemini_y):.1f}</title></line>"
         )
         out.append(
             f'<text class="ch-target-label" x="{pad_l + 4}" y="{ty - 6:.1f}" text-anchor="start">'
-            f"{esc(target_label)}</text>"
+            f"{esc(gemini_label)}</text>"
         )
+        out.append("</g>")
 
-    placed: list[tuple[float, float, float]] = []  # (x_center, y, half_width)
+    placed: list[tuple[float, float, float]] = []
     for p in points:
         if p.get("x") is None or p.get("y") is None:
             continue
@@ -838,7 +570,6 @@ def scatter_svg(
         )
         if not label:
             continue
-        # ── تفادي تداخل التسميات: لو-label فوقي قريبة ⇒ انزلها تحت النقطة
         half = max(24.0, len(label) * 3.2)
         lx = min(max(x, pad_l + half * 0.4), width - pad_r - half * 0.4)
         ly = y - 15
@@ -863,13 +594,10 @@ def scatter_svg(
     return "".join(out)
 
 
-# --------------------------------------------------------------------------- النتائج لكل موديل
 def _short_model(name: str, limit: int = 26) -> str:
     """اسم موديل مختصر للعرض في الرسوم والجداول."""
     text = Path_name(str(name or ""))
     text = text.replace(".gguf", "")
-    # شيل علامات مثل «(خط الأساس)» — بتخلي الاسم أطول من اللازم
-    text = re.sub(r"\s*\(\s*(?:خط\s*الأساس|baseline)\s*\)\s*", " ", text, flags=re.I)
     text = text.strip()
     return text[:limit] if text else "—"
 
@@ -877,95 +605,67 @@ def _short_model(name: str, limit: int = 26) -> str:
 def _verdict_class(verdict: Any) -> str:
     """تصنيف CSS للحكم — نفس منطق html_report (مفيش استيراد دائري)."""
     text = str(verdict or "")
-    if "غير موثوق" in text or "مرفوض" in text or "خطير" in text:
+    if "فشل حرج" in text:
         return "v-bad"
-    if "جاهز" in text:
-        return "v-ready"
-    if "ممتاز" in text:
+    if "قريب جدًا" in text:
         return "v-good"
-    if "مقبول" in text:
+    if "قريب مع فجوات" in text:
         return "v-ok"
-    if "ضعيف" in text:
+    if "متوسط" in text:
         return "v-weak"
+    if "بعيد" in text:
+        return "v-bad"
     return "v-na"
 
 
-def _target_reference_card(exam_cfg: dict) -> str:
-    """كارت **الهدف** (Gemini 2.5 Pro) — مرجع مكتمل زي كارت الموديل.
-
-    بيظهر جنب كروت الموديلات عشان المقارنة تكون مباشرة: نفس الشكل، ونفس
-    المحاور الأربعة، بس عليه وسم «هدف» ومصدر معلن (معايرة يدوية).
-    """
-    target = target_config(exam_cfg)
-    if not target:
+# --------------------------------------------------------------------------- النتائج لكل موديل
+def _gemini_reference_card(exam_cfg: dict) -> str:
+    """كارت **مرجع Gemini** (عرض فقط) — بنفس شكل كارت الموديل."""
+    ref = gemini_reference(exam_cfg)
+    if not ref:
         return ""
-    axes_cfg = exam_cfg.get("axes") or {}
-    total = float(target.get("total") or 0.0)
-    t_axes = target.get("axes") or {}
-
-    axis_bars = ""
-    for key, label in (
-        ("1", "① اللهجة"),
-        ("2", "② الأمانة"),
-        ("3", "③ الشغل"),
-        ("4", "④ المهارات"),
-    ):
-        maxv = float((axes_cfg.get(key) or {}).get("max") or 0.0)
-        score = float(t_axes.get(key) or 0.0)
-        pct = _pct(score, maxv) or 0.0
-        axis_bars += (
+    values = gemini_values(exam_cfg)
+    if not values:
+        return ""
+    avg = gemini_total(exam_cfg)
+    bars = ""
+    for key in (exam_cfg.get("categories") or {}).keys():
+        label = category_short(exam_cfg, key)
+        value = values.get(key)
+        if value is None:
+            continue
+        bars += (
             f'<div class="mc-axis"><span class="mc-axis-l">{esc(label)}</span>'
-            f'<span class="bar sm"><i style="width:{pct:.1f}%"></i></span>'
-            f'<span class="num mc-axis-v" dir="ltr">{_num(score, 1)}/{_num(maxv, 0)}</span></div>'
+            f'<span class="bar sm"><i style="width:{float(value):.1f}%"></i></span>'
+            f'<span class="num mc-axis-v" dir="ltr">{_num(value, 1)}%</span></div>'
         )
-
-    try:
-        ar = float(target.get("ar_ratio") or 0.0) * 100.0
-    except (TypeError, ValueError):
-        ar = 0.0
-
     return f"""
-<article class="card mc-card target-card">
+<article class="card mc-card target-card {GEM_CLASS}">
   <header class="mc-head">
-    <div class="mc-gauge">{_gauge_svg(total)}
-      <div class="mc-score"><b class="num" dir="ltr">{_num(total, 1)}</b><small>/100</small></div>
+    <div class="mc-gauge">{_gauge_svg(avg)}
+      <div class="mc-score"><b class="num" dir="ltr">{_num(avg, 1)}</b><small>/100</small></div>
     </div>
     <div class="mc-title">
-      <div class="model-name">🎯 {esc(target.get("name") or "الهدف")}</div>
-      <div class="mut small">الهدف — ليس موديلاً مُشغّلاً</div>
-      <div class="mc-verdict"><span class="verdict {_verdict_class(target.get("verdict"))}">{esc(str(target.get("verdict") or "—"))}</span></div>
-      <div class="mc-gates"><span class="pill target">{esc(source_badge(target))}</span></div>
+      <div class="model-name">🎯 {esc(ref.get("name") or "مرجع Gemini")}</div>
+      <div class="mut small">مرجع عرض فقط ⛔ — مش موديل مُشغّل ولا مشغّل بامتحاننا</div>
+      <div class="mc-verdict"><span class="pill target">{esc(source_badge(ref))}</span></div>
     </div>
   </header>
-  <div class="mc-axes">{axis_bars}</div>
+  <div class="mc-axes">{bars}</div>
   <div class="mc-stats">
-    <div class="mc-stat"><span class="mc-k">نسبة العامية</span><span class="mc-v num" dir="ltr">{_num(ar, 1)}%</span></div>
-    <div class="mc-stat"><span class="mc-k">المصدر</span><span class="mc-v">{esc(source_badge(target))}</span></div>
+    <div class="mc-stat"><span class="mc-k">الرقم أعلاه</span><span class="mc-v">متوسط التقدير على المحاور — مش درجة rubric</span></div>
+    <div class="mc-stat"><span class="mc-k">المصدر</span><span class="mc-v">{esc(source_badge(ref))}</span></div>
   </div>
-  <div class="base-source target-src"><b>ملاحظة:</b> {esc(str(target.get("note") or ""))}</div>
+  <div class="base-source target-src"><b>ملاحظة:</b> {esc(str(ref.get("note") or ""))}</div>
 </article>"""
 
 
 def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
-    """«النتيجة لكل موديل» — كارت واحد لكل موديل بالدرجة والمحاور والسرعة.
-
-    ده المقابل لـ «النتيجة لكل موديل × وضع» في التقرير المرجعي:
-    عندنا «الوضع» = الموديل نفسه (كل موديل بيشتغل بإعداداته)،
-    فالكارت يعرض كل التفاصيل اللي محتاجها قبل ما تقرر.
-    """
+    """«النتيجة لكل موديل» — كارت واحد لكل موديل بالدرجة والمحاور والسرعة."""
     models = _ok_models(results)
     if not models:
         return ""
-    axes_cfg = exam_cfg.get("axes") or {}
-    published = _baseline(exam_cfg)
-    base_total = float(published.get("total") or 0.0)
-    measured, _base_source = measured_baseline_model(results, exam_cfg)
-    if measured:
-        base_total = float((measured.get("exam") or {}).get("total") or 0.0)
-
-    # ── الهدف (Gemini 2.5 Pro): مرجع «معايرة يدوية» — بتظهر معاه المسافة
-    target = target_config(exam_cfg)
-    target_total = float(target.get("total") or 0.0) if target else 0.0
+    ref = gemini_reference(exam_cfg)
 
     cards: list[str] = []
     for index, result in enumerate(models):
@@ -976,51 +676,36 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
         manifest = result.get("manifest") or {}
         total = float(exam.get("total") or 0.0)
         verdict = str(exam.get("verdict") or "—")
-        delta = total - base_total if base_total else None
         tg = (perf.get("tg_tps") or {}).get("avg")
         ttft = (perf.get("ttft_ms") or {}).get("avg")
         req = (perf.get("request_seconds") or {}).get("avg")
-        ar = float(exam.get("ar_ratio") or 0.0) * 100.0
-        # المسافة عن الهدف (Gemini) — أقل = أقرب
-        gap = target_gap(exam, target, axes_cfg) if target else {"total": None, "distance": None}
-        gap_total = gap.get("total")
-        distance = gap.get("distance")
+        categories = exam.get("categories") or {}
 
-        # شرائط المحاور الأربعة
+        # شرائط المحاور الثمانية + علامة «تحت الحد الأدنى»
         axis_bars = ""
-        for key, label in (
-            ("1", "① اللهجة"),
-            ("2", "② الأمانة"),
-            ("3", "③ الشغل"),
-            ("4", "④ المهارات"),
-        ):
-            axis = (exam.get("axes") or {}).get(key) or {}
-            score = float(axis.get("score") or 0.0)
-            maxv = float(axis.get("max") or (axes_cfg.get(key) or {}).get("max") or 0.0)
-            pct = _pct(score, maxv) or 0.0
-            trust = str(axis.get("trust_flag") or "")
-            trust_html = (
-                f'<span class="trust-flag" title="{esc(str(axis.get("trust_note") or ""))}">{esc(trust)}</span>'
-                if trust
-                else ""
+        for key in (exam_cfg.get("categories") or {}).keys():
+            label = category_short(exam_cfg, key)
+            row = categories.get(key) or {}
+            pct = float(row.get("percent") or 0.0)
+            under = bool(row.get("failed_min"))
+            under_html = (
+                '<span class="trust-flag" title="تحت الحد الأدنى — فشل حرج">⛔</span>' if under else ""
             )
             axis_bars += (
                 f'<div class="mc-axis"><span class="mc-axis-l">{esc(label)}</span>'
                 f'<span class="bar sm"><i style="width:{pct:.1f}%"></i></span>'
-                f'<span class="num mc-axis-v" dir="ltr">{_num(score, 1)}/{_num(maxv, 0)}{trust_html}</span></div>'
+                f'<span class="num mc-axis-v" dir="ltr">{_num(pct, 1)}%{under_html}</span></div>'
             )
 
-        fired = [g.get("code") for g in (exam.get("gates") or []) if g.get("fired")]
-        gates_html = (
-            "".join(f'<span class="gate on">{esc(g)}</span>' for g in fired)
-            or '<span class="gate off">سليمة</span>'
+        failed = list(exam.get("failed_categories") or [])
+        failed_html = (
+            "".join(
+                f'<span class="gate on" title="محور تحت الحد الأدنى">{esc(str((exam_cfg.get("categories") or {}).get(k, {}).get("short") or k))}</span>'
+                for k in failed
+            )
+            or '<span class="gate off">كل المحاور فوق الحد</span>'
         )
-        delta_html = (
-            f'<span class="{"up" if delta >= 0 else "down"}" dir="ltr">{"+" if delta >= 0 else ""}{delta:.2f}</span>'
-            if delta is not None
-            else "—"
-        )
-        # سطر تحت الاسم: الكمية + حجم الملف
+
         quant = str(manifest.get("quant_pattern") or "")
         file_name = Path_name(str(manifest.get("primary_path") or fit.get("file") or ""))
         subtitle_parts = []
@@ -1029,6 +714,10 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
         elif file_name:
             subtitle_parts.append(esc(file_name))
         subtitle = " · ".join(subtitle_parts) or "—"
+
+        # المسافة عن مرجع Gemini (عرض فقط)
+        gap = gemini_gap(exam, exam_cfg) if ref else {"distance": None, "per_axis": {}}
+        distance = gap.get("distance")
 
         cards.append(
             f"""
@@ -1041,15 +730,12 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
       <div class="model-name" title="{esc(result.get('model_full') or result.get('model'))}">{esc(result.get('model'))}</div>
       <div class="mut small">{subtitle}</div>
       <div class="mc-verdict"><span class="verdict {_verdict_class(verdict)}">{esc(verdict)}</span></div>
-      <div class="mc-gates">{gates_html}</div>
+      <div class="mc-gates">{failed_html}</div>
     </div>
   </header>
   <div class="mc-axes">{axis_bars}</div>
   <div class="mc-stats">
-    <div class="mc-stat"><span class="mc-k">Δ عن الأساس</span><span class="mc-v">{delta_html}</span></div>
-    <div class="mc-stat"><span class="mc-k">Δ عن الهدف (Gemini)</span><span class="mc-v {"" if gap_total is None else ("up" if gap_total >= 0 else "down")}" dir="ltr">{"" if gap_total is None else ("+" if gap_total >= 0 else "") + format(gap_total, ".2f")}</span></div>
-    <div class="mc-stat"><span class="mc-k">المسافة عن الهدف</span><span class="mc-v num" dir="ltr">{_num(distance, 1)}</span></div>
-    <div class="mc-stat"><span class="mc-k">نسبة العامية</span><span class="mc-v num" dir="ltr">{_num(ar, 1)}%</span></div>
+    <div class="mc-stat"><span class="mc-k {GEM_CLASS}">المسافة عن مرجع Gemini</span><span class="mc-v num {GEM_CLASS}" dir="ltr">{_num(distance, 1)}</span></div>
     <div class="mc-stat"><span class="mc-k">⚡ توليد tok/s (مقيس)</span><span class="mc-v tok-v num" dir="ltr">{_num(tg, 1)}</span></div>
     <div class="mc-stat"><span class="mc-k">أول استجابة ms</span><span class="mc-v num" dir="ltr">{_num(ttft, 0)}</span></div>
     <div class="mc-stat"><span class="mc-k">زمن الطلب s</span><span class="mc-v num" dir="ltr">{_num(req, 1)}</span></div>
@@ -1058,47 +744,305 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
 </article>"""
         )
 
-    # ── كارت الهدف أول الكروت (مرجع واضح + مصدر معلن)
-    target_card = _target_reference_card(exam_cfg)
-    if target_card:
-        cards.insert(0, target_card)
+    gem_card = _gemini_reference_card(exam_cfg)
+    if gem_card:
+        cards.insert(0, gem_card)
 
-    base_note = (
-        "المرجع الإضافي = الموديل المرجعي **المقاس في نفس التشغيل** (المقارنة على نفس السياسة ونفس الجهاز)."
-        if measured
-        else "المرجع الإضافي = الأرقام **المنشورة** في ورقة الامتحان §0.6."
-    )
-    target_note = (
-        f"🎯 **الهدف** = {esc(str(target.get('name') or ''))} "
-        f"(<span class=\"pill target\">{esc(source_badge(target))}</span>) — "
-        "أرقامه **معايرة يدوية** مش مقيسة، و«المسافة عن الهدف» = متوسط فرق النسبة "
-        "على المحاور الأربعة (٠ = مطابق تماماً، **الأقل = الأقرب**)."
-        if target
+    ref_note = (
+        f'<span class="{GEM_CLASS}">🎯 <b>مرجع {esc(str(ref.get("name") or ""))}</b> '
+        f'(<span class="pill target">{esc(source_badge(ref))}</span>) — أرقامه <b>بنشماركات عامة منشورة</b> '
+        "مش مقاسة على أسئلة امتحاننا، و<b>مالوش أي تأثير</b> في درجة أي نموذج ولا في الحكم.</span>"
+        if ref
         else ""
     )
     return f"""
 <section class="section" id="cards">
   <div class="section-head">
     <div><h2>🏅 النتيجة لكل موديل</h2>
-      <p class="sub">كارت لكل موديل: الدرجة والحكم والمحاور الأربعة والبوابات المفعّلة والأداء المقيس.
-      {base_note} {target_note}</p></div>
+      <p class="sub">كارت لكل موديل: الدرجة والحكم ونسب المحاور الثمانية والمحاور تحت الحد الأدنى والأداء المقيس.
+      {ref_note}</p></div>
   </div>
   <div class="mc-grid">{''.join(cards)}</div>
 </section>
 """
 
 
-def speed_table_section(results: list[dict], exam_cfg: dict) -> str:
-    """«⚡ جدول السرعة» — زمن كل سؤال + سرعة التوليد لكل موديل جنب بعض.
+# --------------------------------------------------------------------------- رسوم المقارنة (القسم)
+def charts_section(results: list[dict], exam_cfg: dict) -> str:
+    """رسوم المقارنة: أعمدة المحاور الثمانية + انتشار الدرجة مقابل الزمن."""
+    models = _ok_models(results)
+    if not models:
+        return ""
+    keys = list((exam_cfg.get("categories") or {}).keys())
+    labels = [category_short(exam_cfg, key) for key in keys]
+    labels.append("المجموع")
 
-    الأرقام **مقيسة فعلياً** (من `timings` الخاص بـ llama.cpp ومن أوقات الطلبات).
-    """
+    series: list[dict] = []
+    scatter_points: list[dict] = []
+    for index, result in enumerate(models):
+        exam = result.get("exam") or {}
+        color = CHART_COLORS[index % len(CHART_COLORS)]
+        categories = exam.get("categories") or {}
+        values = [float((categories.get(key) or {}).get("percent") or 0.0) for key in keys]
+        values.append(float(exam.get("total") or 0.0))
+        series.append({"label": str(result.get("model") or ""), "color": color, "values": values})
+
+        runtime = result.get("runtime") or {}
+        perf = runtime.get("perf") or {}
+        seconds = perf.get("seconds_total") or runtime.get("seconds_total")
+        try:
+            x = float(seconds) if seconds else None
+        except (TypeError, ValueError):
+            x = None
+        scatter_points.append(
+            {
+                "x": x,
+                "y": float(exam.get("total") or 0.0),
+                "color": color,
+                "short": _short_model(result.get("model") or "", 16),
+                "label": result.get("model"),
+                "tip": (
+                    f"{result.get('model')} — الدرجة {float(exam.get('total') or 0):.2f}/100 · "
+                    f"إجمالي {x:.0f}s" if x is not None else str(result.get("model"))
+                ),
+            }
+        )
+
+    # ── مرجع Gemini: عمود بنفسجي + خط أفقي (عرض فقط — كله gem-ref)
+    ref = gemini_reference(exam_cfg)
+    ref_values_map = gemini_values(exam_cfg)
+    gem_y = gemini_total(exam_cfg)
+    if ref and ref_values_map:
+        ref_series = [float(ref_values_map.get(key, 0.0)) for key in keys]
+        ref_series.append(float(gem_y or 0.0))
+        series.append(
+            {
+                "label": str(ref.get("name") or "مرجع Gemini"),
+                "color": GEMINI_COLOR,
+                "values": ref_series,
+                "css_class": GEM_CLASS,
+                "is_gemini": True,
+            }
+        )
+
+    bar_svg = grouped_bar_svg(labels, series)
+    xs = [float(p["x"]) for p in scatter_points if p.get("x") is not None]
+    scatter_html = scatter_svg(
+        scatter_points,
+        x_label="إجمالي زمن تشغيل الامتحان (ثانية)",
+        y_label="الدرجة /100",
+        x_max=(max(xs) * 1.2) if xs else None,
+        gemini_y=gem_y if ref else None,
+        gemini_label=str(ref.get("name") or "مرجع Gemini"),
+    )
+    legend = "".join(
+        f'<span class="legend-chip{" " + GEM_CLASS if item.get("is_gemini") else ""}" style="--c:{item["color"]}">'
+        f'<i class="dot"></i>'
+        f'<span class="lc-name">{esc(_short_model(item["label"], 24))}</span>'
+        + ('<span class="lc-badge">مرجع</span>' if item.get("is_gemini") else "")
+        + "</span>"
+        for item in series
+    )
+    gem_legend = ""
+    if ref:
+        gem_legend = (
+            f'<p class="mut small {GEM_CLASS}">الخط الأفقي البنفسجي = {esc(str(ref.get("name") or ""))} '
+            f"({esc(source_badge(ref))}) — <b>عرض فقط ⛔</b>، مالوش تأثير في الدرجة ولا الحكم.</p>"
+        )
+    return f"""
+<section class="section" id="charts">
+  <div class="section-head">
+    <div><h2>📊 رسوم المقارنة</h2>
+      <p class="sub">الأعمدة = النسبة على كل محور (0–100%) لكل موديل.
+      والنقطة = الموديل: كلما كانت أعلى كلما أفضل، وكلما كانت على الشمال (أقل زمن) كلما أسرع.</p></div>
+    <div class="legend-chips">{legend}</div>
+  </div>
+  <div class="grid2">
+    <div class="card chart-card">
+      <h3 class="panel-title">الدرجة على كل محور</h3>
+      {bar_svg}
+    </div>
+    <div class="card chart-card">
+      <h3 class="panel-title">الجودة مقابل الزمن</h3>
+      {scatter_html}
+      {gem_legend}
+      <p class="mut small">الموديل فوق الخط وبـ x صغير = أحسن اختيار.</p>
+    </div>
+  </div>
+</section>
+"""
+
+
+# --------------------------------------------------------------------------- إعدادات الموديلات
+def settings_section(results: list[dict], exam_cfg: dict) -> str:
+    """الإعدادات الفعلية لكل موديل + تحذير لو اختلفت القوالب بين الموديلات."""
+    models = _ok_models(results)
+    if not models:
+        return ""
+    rows: list[str] = []
+    templates: dict[str, str] = {}
+    for result in models:
+        st = result.get("settings") or {}
+        runtime = result.get("runtime") or {}
+        template = str(st.get("chat_template") or runtime.get("template") or "—")
+        templates[template] = template
+        rec = st.get("recommended_sampling") or {}
+        applied = st.get("applied") or []
+        warnings = st.get("warnings") or []
+        rows.append(
+            f"""
+<article class="card set-card">
+  <header class="set-head">
+    <div class="ans-model">{esc(result.get('model'))}</div>
+    <span class="pill muted">{esc(st.get('source') or '—')}</span>
+  </header>
+  <div class="set-grid">
+    <div class="set-k">القالب</div><div class="set-v" dir="ltr">{esc(Path_name(template))}</div>
+    <div class="set-k">مصدر القالب</div><div class="set-v">{esc(st.get('template_source') or runtime.get('template_mode') or '—')}</div>
+    <div class="set-k">KV cache</div><div class="set-v" dir="ltr">{esc(st.get('kv_cache_type') or runtime.get('kv') or '—')}</div>
+    <div class="set-k">flash-attn</div><div class="set-v" dir="ltr">{esc(st.get('flash_attn') or runtime.get('flash_attn') or '—')}</div>
+    <div class="set-k">ngl (offload)</div><div class="set-v num" dir="ltr">{esc(st.get('n_gpu_layers') if st.get('n_gpu_layers') is not None else runtime.get('ngl', '—'))}</div>
+    <div class="set-k">threads</div><div class="set-v num" dir="ltr">{esc(st.get('threads') if st.get('threads') is not None else runtime.get('threads', '—'))}</div>
+    <div class="set-k">device</div><div class="set-v" dir="ltr">{esc(st.get('device') or runtime.get('device') or '—')}</div>
+    <div class="set-k">Sampling مطبّق</div>
+    <div class="set-v num" dir="ltr">temp={esc(runtime.get('temperature', '—'))} · top_p={esc(runtime.get('top_p', '—'))} · seed={esc(runtime.get('seed', '—'))}</div>
+    <div class="set-k">توصيات المطوّر</div>
+    <div class="set-v">{" · ".join(f"{k}={v}" for k, v in rec.items()) or "—"}
+      <span class="mut small">[{esc(st.get('sampling_source') or 'none')}]</span></div>
+  </div>
+  {f'<div class="notes"><b>مطبّق:</b> {esc(" · ".join(applied))}</div>' if applied else ""}
+  {f'<div class="notes bad"><b>تنبيهات:</b> {esc(" · ".join(warnings))}</div>' if warnings else ""}
+</article>"""
+        )
+    banner = ""
+    if len(templates) > 1:
+        banner = (
+            '<div class="card note warn-note"><b>⚠ تحذير قابلية المقارنة:</b> الموديلات استخدمت قوالب مختلفة '
+            f'({esc(" ، ".join(sorted(templates)))}). المقارنة بين الموديلات في هذه الحالة تقريبية — '
+            "للمقارنة المطلقة ثبّت نفس القالب لكل الموديلات.</div>"
+        )
+    return f"""
+<section class="section" id="settings">
+  <div class="section-head">
+    <div><h2>⚙️ الإعدادات الفعلية لكل موديل</h2>
+      <p class="sub">اللي اتشغّل بيه فعلياً: قالب المحادثة، KV، offload، threads، device.
+      إعدادات الامتحان الثابتة (temp/top_p/seed/ctx) واحدة للجميع.</p></div>
+  </div>
+  {banner}
+  <div class="set-grid-cards">{''.join(rows)}</div>
+</section>
+"""
+
+
+# --------------------------------------------------------------------------- سجل الإجابات الكامل
+def transcripts_section(results: list[dict], exam_cfg: dict) -> str:
+    """سجل الإجابات الكامل: نص السؤال + نص الإجابة + ملاحظات المصحح لكل موديل."""
     models = _ok_models(results)
     if not models:
         return ""
     questions = exam_cfg.get("questions") or []
 
-    # ── الجدول الأول: ملخص لكل موديل
+    blocks: list[str] = []
+    for m_index, result in enumerate(models):
+        exam = result.get("exam") or {}
+        qrows = exam.get("questions") or {}
+        items: list[str] = []
+        for q in questions:
+            qid = str(q.get("id"))
+            row = qrows.get(qid) or {}
+            prompt = str(row.get("prompt") or q.get("prompt") or "")
+            reasoning = str(row.get("reasoning") or "")
+            answer = str(row.get("answer") or "")
+            notes = "؛ ".join(row.get("notes") or [])
+            health = "، ".join(row.get("health") or [])
+            blob = " ".join(
+                [qid, str(q.get("title") or ""), prompt, reasoning, answer, notes, str(result.get("model") or "")]
+            ).lower()
+            think_block = (
+                f'<div class="tr-text think">{esc(reasoning)}</div>'
+                if reasoning
+                else '<div class="tr-text think muted">— لا يوجد نص تفكير (التشغيل بوضع بلا تفكير '
+                "حسب إعدادات الامتحان) —</div>"
+            )
+            answer_block = (
+                f'<div class="tr-text answer">{esc(answer)}</div>'
+                if answer
+                else '<div class="tr-text answer bad">— رد فاضي —</div>'
+            )
+            tool_calls = row.get("tool_calls") or []
+            tool_block = ""
+            if tool_calls:
+                calls_txt = " · ".join(
+                    f"{c.get('name')}({json.dumps(c.get('arguments') or {}, ensure_ascii=False)})"
+                    for c in tool_calls
+                )
+                tool_block = (
+                    f'<div class="tr-part"><div class="tr-label">🛠 استدعاءات الأدوات</div>'
+                    f'<div class="tr-text q" dir="ltr">{esc(calls_txt)}</div></div>'
+                )
+            items.append(
+                f"""
+<article class="tr-item" data-search="{esc(blob)}">
+  <header class="tr-head">
+    <span class="qid">{esc(qid)}</span>
+    <span class="tr-title">{esc(q.get("title"))}</span>
+    <span class="tr-axis">{esc(str(row.get("category") or q.get("category") or "—"))}</span>
+    <span class="tr-score num" dir="ltr">{_num(row.get("score"), 1)}/{_num(row.get("max"), 0)}</span>
+  </header>
+  <div class="tr-meta">
+    <span>{esc(row.get("chars") or 0)} حرف</span>
+    <span>{esc(row.get("tokens") if row.get("tokens") is not None else "—")} توكن</span>
+    <span>{_num(row.get("seconds"), 1)} ث</span>
+    <span>{esc(row.get("finish") or "—")}</span>
+    {f'<span class="bad small">⚠ {esc(health)}</span>' if health else ""}
+  </div>
+  <div class="tr-part"><div class="tr-label">📝 نص السؤال</div><div class="tr-text q">{esc(prompt)}</div></div>
+  {tool_block}
+  <div class="tr-part"><div class="tr-label">🧠 نص التفكير</div>{think_block}</div>
+  <div class="tr-part"><div class="tr-label">💬 نص الإجابة</div>{answer_block}</div>
+  {f'<div class="notes"><b>ملاحظات المصحح:</b> {esc(notes)}</div>' if notes else ""}
+  {f'<div class="notes bad">خطأ تشغيل: {esc(row.get("error"))}</div>' if row.get("error") else ""}
+</article>"""
+            )
+        total = exam.get("total")
+        blocks.append(
+            f"""
+<details class="card model-tr" data-model="m{m_index}" {'open' if m_index == 0 else ''}>
+  <summary>
+    <span class="ans-model">{esc(result.get('model'))}</span>
+    <span class="tr-total num" dir="ltr">{_num(total, 1)}/100</span>
+    <span class="verdict-mut mut small">{esc(exam.get('verdict') or "")}</span>
+    <span class="mut small">{len(items)} سؤال</span>
+  </summary>
+  <div class="tr-list">{''.join(items)}</div>
+</details>"""
+        )
+
+    return f"""
+<section class="section" id="transcripts">
+  <div class="section-head">
+    <div><h2>🗂 سجل الإجابات الكامل</h2>
+      <p class="sub">كل موديل: نص السؤال + نص الإجابة كما وصل من الخادم +
+      ملاحظات المصحح — عشان تراجع بنفسك العامية المصرية والجودة اللغوية قبل ما تقرر.</p></div>
+    <div class="tr-tools">
+      <input id="tr-search" type="search" placeholder="بحث في الأسئلة والتفكير والإجابات…">
+      <button type="button" class="btn" id="tr-expand">فتح الكل</button>
+      <button type="button" class="btn" id="tr-collapse">طي الكل</button>
+    </div>
+  </div>
+  <div class="tr-models">{''.join(blocks)}</div>
+</section>
+"""
+
+
+# --------------------------------------------------------------------------- جدول السرعة
+def speed_table_section(results: list[dict], exam_cfg: dict) -> str:
+    """«⚡ جدول السرعة» — زمن كل سؤال + سرعة التوليد لكل موديل جنب بعض."""
+    models = _ok_models(results)
+    if not models:
+        return ""
+    questions = exam_cfg.get("questions") or []
+
     summary_rows: list[str] = []
     for result in models:
         runtime = result.get("runtime") or {}
@@ -1129,20 +1073,6 @@ def speed_table_section(results: list[dict], exam_cfg: dict) -> str:
 </tr>"""
         )
 
-    # ── صف مرجعي: الهدف (Gemini 2.5 Pro) — مش مُشغّل محلياً ⇒ السرعة غير مقيسة
-    target = target_config(exam_cfg)
-    if target:
-        dashes = "".join('<td class="num" dir="ltr">—</td>' for _ in range(13))
-        summary_rows.append(
-            f"""
-<tr class="target-row">
-  <td class="model-cell"><div class="model-name">🎯 {esc(target.get('name') or 'الهدف')}</div>
-    <div class="mut small">{esc(source_badge(target))} — شريط هدف، مش موديل مُشغّل على الجهاز</div></td>
-  {dashes}
-</tr>"""
-        )
-
-    # ── الجدول الثاني: زمن كل سؤال × كل موديل
     detail_head = "".join(
         f"<th class='sp-model' title='{esc(r.get('model'))}'>{esc(_short_model(r.get('model') or '', 24))}</th>"
         for r in models
@@ -1205,146 +1135,21 @@ def speed_table_section(results: list[dict], exam_cfg: dict) -> str:
 """
 
 
-def charts_section(results: list[dict], exam_cfg: dict) -> str:
-    """رسوم المقارنة: أعمدة المحاور + انتشار الجودة مقابل الزمن."""
-    models = _ok_models(results)
-    if len(models) < 1:
-        return ""
-    axes_cfg = exam_cfg.get("axes") or {}
-    categories = ["① اللهجة", "② الأمانة", "③ الشغل", "④ المهارات", "المجموع"]
-    series: list[dict] = []
-    scatter_points: list[dict] = []
-    for index, result in enumerate(models):
-        exam = result.get("exam") or {}
-        color = CHART_COLORS[index % len(CHART_COLORS)]
-        values: list[float] = []
-        for key in ("1", "2", "3", "4"):
-            axis = (exam.get("axes") or {}).get(key) or {}
-            maxv = axis.get("max") or (axes_cfg.get(key) or {}).get("max")
-            values.append(_pct(axis.get("score"), maxv) or 0.0)
-        values.append(float(exam.get("total") or 0.0))
-        series.append({"label": str(result.get("model") or ""), "color": color, "values": values})
-
-        runtime = result.get("runtime") or {}
-        perf = runtime.get("perf") or {}
-        seconds = perf.get("seconds_total") or runtime.get("seconds_total")
-        try:
-            x = float(seconds) if seconds else None
-        except (TypeError, ValueError):
-            x = None
-        scatter_points.append(
-            {
-                "x": x,
-                "y": float(exam.get("total") or 0.0),
-                "color": color,
-                "short": _short_model(result.get("model") or "", 16),
-                "label": result.get("model"),
-                "tip": (
-                    f"{result.get('model')} — الدرجة {float(exam.get('total') or 0):.2f}/100 · "
-                    f"إجمالي {x:.0f}s" if x is not None else str(result.get("model"))
-                ),
-            }
-        )
-
-    published = _baseline(exam_cfg)
-    measured, _src = measured_baseline_model(results, exam_cfg)
-    base_y = (
-        float((measured.get("exam") or {}).get("total") or 0.0)
-        if measured
-        else float(published.get("total") or 0.0)
-    )
-
-    # ── الهدف (Gemini 2.5 Pro): خط أفقي في الانتشار + عمود في الأعمدة
-    target = target_config(exam_cfg)
-    target_y = float(target.get("total") or 0.0) if target else None
-    if target:
-        t_axes = target.get("axes") or {}
-        target_values = [
-            _pct(t_axes.get(k), (axes_cfg.get(k) or {}).get("max")) or 0.0
-            for k in ("1", "2", "3", "4")
-        ]
-        target_values.append(float(target.get("total") or 0.0))
-        series.append(
-            {
-                "label": str(target.get("name") or "الهدف"),
-                "color": TARGET_COLOR,
-                "values": target_values,
-                "is_target": True,
-            }
-        )
-
-    bar_svg = grouped_bar_svg(categories, series)
-    xs = [float(p["x"]) for p in scatter_points if p.get("x") is not None]
-    scatter_svg_html = scatter_svg(
-        scatter_points,
-        x_label="إجمالي زمن تشغيل الامتحان (ثانية)",
-        y_label="الدرجة /100",
-        x_max=(max(xs) * 1.2) if xs else None,
-        baseline_y=base_y or None,
-        target_y=target_y or None,
-        target_label=str(target.get("name") or "الهدف"),
-    )
-    legend = "".join(
-        f'<span class="legend-chip" style="--c:{item["color"]}"><i class="dot"></i>'
-        f'<span class="lc-name">{esc(_short_model(item["label"], 24))}</span>'
-        + ('<span class="lc-badge">هدف</span>' if item.get("is_target") else "")
-        + "</span>"
-        for item in series
-    )
-    return f"""
-<section class="section" id="charts">
-  <div class="section-head">
-    <div><h2>📊 رسوم المقارنة</h2>
-      <p class="sub">الأعمدة = الدرجة النسبية على كل محور (0–100%) لكل موديل.
-      والنقطة = الموديل: كلما كانت أعلى كلما أفضل، وكلما كانت على الشمال (أقل زمن) كلما أسرع.
-      <b>الهدف (Gemini 2.5 Pro)</b> موجود في الرسمين: عمود بنفسجي في الأعمدة، وخط أفقي في الانتشار.</p></div>
-    <div class="legend-chips">{legend}</div>
-  </div>
-  <div class="grid2">
-    <div class="card chart-card">
-      <h3 class="panel-title">الدرجة على كل محور</h3>
-      {bar_svg}
-    </div>
-    <div class="card chart-card">
-      <h3 class="panel-title">الجودة مقابل الزمن</h3>
-      {scatter_svg_html}
-      <p class="mut small">الخط الأفقي الكهرماني = المرجع الإضافي، والبنفسجي = الهدف ({esc(str(target.get("name") or "الهدف"))} · {esc(source_badge(target))}).
-      الموديل فوق الخطوط وبـ x صغير = أحسن اختيار.</p>
-    </div>
-  </div>
-</section>
-"""
-
-
-def Path_name(path: str) -> str:
-    """اسم الملف من مسار (Windows/Posix)."""
-    text = str(path).replace("\\", "/")
-    return text.rsplit("/", 1)[-1] if "/" in text else text
-
-
-# --------------------------------------------------------------------------- مساعدات داخلية
-def _baseline(exam_cfg: dict) -> dict:
-    return exam_cfg.get("baseline") or {}
-
-
-def _ok_models(results: list[dict]) -> list[dict]:
-    return [r for r in results if r.get("status") == "ok" and r.get("exam")]
-
-
 __all__ = [
     "CHART_COLORS",
-    "RADAR_DIMS",
+    "GEM_CLASS",
+    "category_winners",
+    "charts_section",
+    "gemini_delta_matrix",
+    "gemini_ranking_table",
+    "grouped_bar_svg",
+    "model_cards_section",
+    "radar_dims",
     "radar_section",
     "radar_svg",
     "radar_values",
-    "baseline_radar_values",
-    "delta_matrix",
-    "axis_winners",
-    "settings_section",
-    "transcripts_section",
-    "model_cards_section",
-    "speed_table_section",
-    "charts_section",
-    "grouped_bar_svg",
     "scatter_svg",
+    "settings_section",
+    "speed_table_section",
+    "transcripts_section",
 ]

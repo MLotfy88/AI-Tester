@@ -178,7 +178,8 @@ BROKEN_AR = re.compile(
     r"هبقاوم|ماكس|بِنِي"
 )
 
-# G8 — حروف من لغات غريبة (صيني · ياباني · روسي · fullwidth) — §0.4 و§10.6
+# حروف من لغات غريبة (صيني · ياباني · روسي · fullwidth) — معيار «مفيش حروف غريبة»
+# في معايير الـ rubric (v3).
 FOREIGN_SCRIPT = re.compile(
     r"[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
     r"\u0400-\u04ff\u0500-\u052f\uff01-\uff60\uffe0-\uffe6]"
@@ -190,7 +191,10 @@ EG_EXTRA = re.compile(
     r"عشان|علشان|بسبب|بجد|بكام|جربت|جرب|ممكن|محتاج|فاهم|ماشي|بقي|نعمل|نشوف|نتكلم|"
     r"جميل|شغال|امبارح|النهاردة|النهارده|خلاص|خلينا|يلا|تعال|خلي|ابدأ|ابدئي|نبدأ|"
     r"معاها|بتاع|بتاعك|خالص|شوية|شوي|علطول|ياريت|تاني|بكرة|يعني|يبقى|عندك|عندنا|"
-    r"نقدر|هعمل|هنعمله|بنعمل|طبعا|أكيد|صحيح|زي|قاعد|واقع|فعلا|أهو|حلو|كويس)\b",
+    r"نقدر|هعمل|هنعمله|بنعمل|طبعا|أكيد|صحيح|زي|قاعد|واقع|فعلا|أهو|حلو|كويس|"
+    r"مش قادر|قادر|كتير|خايف|زمان|الجنة|نتأكد|نتناقش|بنتأكد|بشوف|بجيب|مبحبش|"
+    r"مش عارف|معروفش|ما أعرفش|ليش|فين|إزاي|kam،|مرات|بصي|بصراحة|علي العموم|"
+    r"ما ينفعش|مينفعش|هينفع|ينفع|بتوع|بتوعنا|ours|بقي|كله|بس)\b",
     re.I,
 )
 
@@ -265,9 +269,10 @@ def score_d4(t: str) -> float:
 
 # ─────────────────────────── تشغيل الكود (منفصل ومؤمّن)
 UNSAFE = re.compile(
-    r"\b(?:os\s*\.\s*system|subprocess|shutil\s*\.\s*rmtree|socket|requests|urllib|"
-    r"httpx|pickle|__import__|eval\s*\(|exec\s*\(|open\s*\([^)]*['\"][wax]|"
-    r"remove\s*\(|rmdir|unlink\s*\(|chmod|shutil\.move)",
+    r"(?:\bos\s*\.\s*system|\bsubprocess\b|\bshutil\s*\.\s*rmtree|\bsocket\b|\brequests\b|"
+    r"\burllib\b|\bhttpx\b|\bpickle\b|__import__|\beval\s*\(|\bexec\s*\(|"
+    r"\bopen\s*\([^)]*['\"][wax]|\bos\s*\.\s*remove\s*\(|\bPath\s*\.\s*remove\s*\(|"
+    r"\brmdir\b|\bunlink\s*\(|\bchmod\b|shutil\.move)",
     re.I,
 )
 

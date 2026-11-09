@@ -1,6 +1,6 @@
-"""يشغّل امتحان الـ 21 سؤال على Kaggle GPU من أمر واحد:
+"""يشغّل امتحان v3 على Kaggle GPU من أمر واحد:
 
-    python kaggle/run_on_kaggle.py --models Qwen/Qwen3.5-4B-GGUF --owner myuser
+    python kaggle/run_on_kaggle.py --models owner/Some-Model-GGUF --owner myuser
 
 الخطوات: بناء الـ kernel ← `kaggle kernels push` ← انتظار ← `kaggle kernels output`.
 
@@ -133,13 +133,12 @@ def main() -> int:
     ap.add_argument("--kernel-name", default="", help="اسم الـ kernel (افتراضي: exam-<تاريخ>)")
     ap.add_argument("--owner", default="", help="اسم مستخدم Kaggle (افتراضي: من التوكن)")
     ap.add_argument("--quant", default="Q4_K_M")
-    ap.add_argument("--ctx", type=int, default=4096)
-    ap.add_argument("--policy", default="paper", choices=["paper", "baseline"])
+    ap.add_argument("--ctx", type=int, default=8192, help="لازم 8192 — ورقة الامتحان ثابتة")
     ap.add_argument("--accelerator", default="t4x2", choices=sorted(build_kernel.ACCELERATORS))
     ap.add_argument("--vram-gib", type=float, default=3.4)
     ap.add_argument("--ram-gib", type=float, default=15.9)
     ap.add_argument("--threads", type=int, default=8)
-    ap.add_argument("--llama-tag", default="latest")
+    ap.add_argument("--llama-tag", default="master", help="master = أحدث llama.cpp (يدعم qwen35)")
     ap.add_argument("--kv", default="f16")
     ap.add_argument("--template-mode", default="auto", choices=["auto", "exam", "model"])
     ap.add_argument("--max-gib", type=float, default=20.0)
@@ -164,7 +163,6 @@ def main() -> int:
         models=args.models,
         quant=args.quant,
         ctx=args.ctx,
-        policy=args.policy,
         accelerator=args.accelerator,
         vram_gib=args.vram_gib,
         ram_gib=args.ram_gib,

@@ -31,7 +31,14 @@ def load_yaml(path: str | Path) -> dict:
 
 
 def load_exam() -> dict:
-    return load_yaml(CONFIG_DIR / "exam.yaml")
+    """مواصفات الامتحان v3 (33 سؤال · 8 محاور) من `exam/exam_questions_v2.json`.
+
+    المصدر الوحيد للحقيقة هو ملف الـ JSON — عن طريق `exam/spec.py`.
+    `config/exam.yaml` القديم اتحذف.
+    """
+    from exam.spec import build_exam
+
+    return build_exam()
 
 
 def load_device_profile(path: str | Path | None = None) -> dict:

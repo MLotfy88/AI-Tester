@@ -1,50 +1,145 @@
-"""مراجع المقارنة — **خط الأساس** (مقاس) + **شريط الهدف** (Gemini 2.5 Pro).
+"""مراجع العرض — الامتحان v3.
 
-الفكرة:
-  · `baseline` = الموديل المرجعي **المقاس آلياً** بنفس المصحّح ⇒ مرجع المقارنة
-    الصالح (نفس السياسة + نفس الجهاز). مصدره معلن صراحةً.
-  · `target`   = **شريط الهدف** — Gemini 2.5 Pro. أرقامه **معايرة يدوية** (§0.6)
-    ⇒ بتظهر كـ«هدف» مش كـ«مقاس» في كل رسوم المقارنة، عشان نعرف مين الأقرب.
+المرجع الوحيد هو **Gemini 2.5 Pro** وهو **عرض فقط (display-only)**:
 
-**قاعدة ثابتة:** كل مرجع في التقرير لازم يكون مكتوب مصدره. الموديلات المقاسة
-بتظهر بأسمائها الحقيقية ومصدرها «مقاس في هذا التشغيل»، والمراجع اليدوية
-بتظهر مع وسم واضح («معايرة يدوية» / «منشور §0.6»).
+  · **لا يدخل** في حساب درجة أي نموذج.
+  · **لا يدخل** في الحكم (verdict) ولا في بوابات الحد الأدنى.
+  · أرقامه **بنشماركات عامة منشورة** لنفس النموذج — مش مقاسة على أسئلة امتحاننا،
+    فاتحوّلت لتقدير لكل محور على سعة 0..100. مصدر كل رقم مكتوب في
+    `config/references.yaml`.
+  · في v3 مفيش «خط أساس» ولا «شريط هدف» ولا وسم «غير موثوق» — اتشالوا كلهم.
 
-الوظائف دي **مش معتمدة** على أي ملف تاني — بتستقبل `exam_cfg` ونتائج التشغيل.
+**المسافة عن المرجع** = متوسط |فرق النسبة| على المحاور الثمانية (٠ = مطابق تماماً).
+مفيش أي «مجموع مرجعي» لأن مجموع Gemini التقديري **مش درجة rubric** — أي مقارنة
+بالمجموع كانت هتبقى مقارنة بين قياسين مختلفين.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
-# ألوان ثابتة للمراجع في كل الرسوم (بنتّفق مع CSS التقرير)
-BASELINE_COLOR = "#fbbf24"   # خط الأساس — كهرماني
-TARGET_COLOR = "#c084fc"     # شريط الهدف (Gemini) — بنفسجي
+#: لون مرجع Gemini في كل الرسوم (بنتّفق مع CSS التقرير)
+GEMINI_COLOR = "#c084fc"
 
 SOURCE_LABELS = {
+    "public_benchmarks": "بنشماركات عامة منشورة",
     "measured": "مقاس آلياً",
     "manual": "معايرة يدوية",
-    "published": "منشور في ورقة الامتحان",
+    "published": "منشور",
     "": "مصدر غير معلن",
 }
 
-# وسم «غير موثوق ⛔» — نفس القيم في `exam/grader.py` (لازم تتظبط مع بعض)
-TRUST_AXIS = "2"
-TRUST_MIN = 18.0
-TRUST_FLAG = "غير موثوق ⛔"
+#: اختصارات المحاور الثمانية — للجداول والرسوم (الاسم الكامل أطول من اللازم)
+CATEGORY_SHORT = {
+    "EG": "العامية",
+    "ST": "أسلوب Gemini",
+    "LG": "المنطق",
+    "HN": "الصدق",
+    "IF": "الالتزام",
+    "DC": "التوثيق",
+    "BR": "النقد",
+    "TL": "الأدوات",
+}
 
 
-# --------------------------------------------------------------------------- الإعدادات
-def baseline_config(exam_cfg: dict | None) -> dict:
-    """خط الأساس (المقاس آلياً) من `config/exam.yaml`."""
-    return dict((exam_cfg or {}).get("baseline") or {})
+def category_short(exam_cfg: dict | None, key: str) -> str:
+    """اسم مختصر للمحور — من `short` في المواصفات أو من الخريطة الافتراضية."""
+    categories = ((exam_cfg or {}).get("categories") or {})
+    cfg: dict = {}
+    if isinstance(categories, dict):
+        cfg = categories.get(str(key)) or {}
+    else:
+        # JSON الخام: categories=list
+        for row in categories:
+            if isinstance(row, dict) and str(row.get("key") or "") == str(key):
+                cfg = row
+                break
+    short = str(cfg.get("short") or "").strip()
+    name = str(cfg.get("name") or "").strip()
+    if short and short != name:
+        return short
+    return CATEGORY_SHORT.get(str(key), name or str(key))
 
 
-def target_config(exam_cfg: dict | None) -> dict:
-    """شريط الهدف — Gemini 2.5 Pro (معايرة يدوية)."""
-    return dict((exam_cfg or {}).get("target") or {})
+# --------------------------------------------------------------------------- مرجع Gemini
+def gemini_reference(exam_cfg: dict | None) -> dict:
+    """كتلة مرجع Gemini من `exam_cfg["references"]["gemini"]`."""
+    refs = (exam_cfg or {}).get("references") or {}
+    return dict(refs.get("gemini") or {})
 
 
+def gemini_axes(exam_cfg: dict | None) -> dict[str, dict]:
+    """تقدير Gemini لكل محور: `{KEY: {value, fit, basis, why}}`."""
+    return dict(gemini_reference(exam_cfg).get("axes") or {})
+
+
+def gemini_values(exam_cfg: dict | None) -> dict[str, float]:
+    """أرقام Gemini الصالحة (0..100) لكل محور — المحاور اللي مفيش لها رقم بتتتجاهل."""
+    out: dict[str, float] = {}
+    for key, row in gemini_axes(exam_cfg).items():
+        value = (row or {}).get("value")
+        if isinstance(value, (int, float)):
+            out[str(key)] = float(value)
+    return out
+
+
+def gemini_total(exam_cfg: dict | None) -> float | None:
+    """متوسط التقدير المرجعي (0..100) — **مش درجة rubric**، رقم استرشادي فقط."""
+    values = list(gemini_values(exam_cfg).values())
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def gemini_radar_values(exam_cfg: dict | None, keys: list[str]) -> list[float]:
+    """قيم Gemini على أبعاد الرسم السداسي (حسب ترتيب `keys`)."""
+    values = gemini_values(exam_cfg)
+    return [values.get(str(key), 0.0) for key in keys]
+
+
+def gemini_gap(exam: dict | None, exam_cfg: dict | None) -> dict:
+    """فرق الموديل عن مرجع Gemini **على مستوى المحاور فقط**.
+
+    بيرجع:
+      `per_axis`  : فرق النسبة على كل محور (موجب = أعلى من المرجع)
+      `distance`  : متوسط |فرق| على المحاور المتاحة (٠ = مطابق تماماً · الأقل = الأقرب)
+      `reference` : أرقام المرجع المستخدمة
+    """
+    exam = exam or {}
+    reference = gemini_values(exam_cfg)
+    categories = exam.get("categories") or {}
+    per_axis: dict[str, float] = {}
+    gaps: list[float] = []
+    for key, ref in reference.items():
+        row = categories.get(key) or {}
+        pct = row.get("percent")
+        if not isinstance(pct, (int, float)):
+            continue
+        diff = round(float(pct) - float(ref), 2)
+        per_axis[key] = diff
+        gaps.append(abs(diff))
+    distance = round(sum(gaps) / len(gaps), 2) if gaps else None
+    return {"per_axis": per_axis, "distance": distance, "reference": reference}
+
+
+def gemini_ranking(results: list[dict], exam_cfg: dict | None) -> list[dict]:
+    """ترتيب الموديلات المقاسة من **الأقرب للمرجع** للأبعد.
+
+    كل عنصر: `{result, gap, distance}` — `distance` أصغر = أقرب.
+    """
+    rows: list[dict] = []
+    for result in results or []:
+        if not result.get("exam"):
+            continue
+        gap = gemini_gap(result.get("exam"), exam_cfg)
+        if gap.get("distance") is None:
+            continue
+        rows.append({"result": result, "gap": gap, "distance": gap["distance"]})
+    rows.sort(key=lambda row: row["distance"])
+    return rows
+
+
+# --------------------------------------------------------------------------- التسميات
 def source_label(cfg: dict | None) -> str:
     """وسم مصدر واضح للمرجع — بيتعرض جنب اسمه في كل مكان."""
     cfg = cfg or {}
@@ -57,16 +152,10 @@ def source_label(cfg: dict | None) -> str:
 
 
 def source_badge(cfg: dict | None) -> str:
-    """وسم قصير (كbadge) لمصدر المرجع."""
+    """وسم قصير (badge) لمصدر المرجع."""
     cfg = cfg or {}
     kind = str(cfg.get("source_kind") or "").strip().lower()
-    if kind == "measured":
-        return "مقاس آلياً"
-    if kind == "manual":
-        return "معايرة يدوية"
-    if kind == "published":
-        return "منشور §0.6"
-    return "مصدر غير معلن"
+    return SOURCE_LABELS.get(kind, SOURCE_LABELS[""])
 
 
 def display_name(model: Any) -> str:
@@ -74,8 +163,6 @@ def display_name(model: Any) -> str:
 
     لو الموديل **مسار محلي** ⇒ نعرض **اسم الملف** بدون `.gguf` (المسار الكامل
     بيبقى متاح في `model_full` كـtooltip). لو **repo id** زي `owner/model` ⇒ نخليه زي ما هو.
-
-    السبب: المسار الكامل (90+ حرف) بيخنق جداول التقرير ويصعّب المقارنة البصرية.
     """
     text = str(model or "").strip()
     if not text:
@@ -87,107 +174,14 @@ def display_name(model: Any) -> str:
     return text
 
 
-def trust_flag_for(cfg: dict | None, axes_cfg: dict | None = None) -> str:
-    """وسم «غير موثوق ⛔» لمرجع (خط الأساس/الهدف) — من الـconfig أو محسوب من ②.
-
-    نفس منطق `exam/grader.py`: المحور ② < 18 ⇒ وسم على **المحور ② نفسه**
-    (مش حكم كلي).
-    """
-    cfg = cfg or {}
-    flag = str(cfg.get("trust_flag") or "").strip()
-    if flag:
-        return flag
-    axes = cfg.get("axes") or {}
-    score = axes.get(TRUST_AXIS)
-    if score is None:
-        return ""
-    maxv = ((axes_cfg or {}).get(TRUST_AXIS) or {}).get("max")
-    try:
-        if float(score) < TRUST_MIN:
-            return TRUST_FLAG
-    except (TypeError, ValueError):
-        pass
-    return ""
-
-
-# --------------------------------------------------------------------------- الحسابات
 def axis_pct(score: Any, maximum: Any) -> float | None:
-    """نسبة المحور من 0 إلى 100 (أو None لو البيانات ناقصة)."""
+    """نسبة من 0 إلى 100 (أو None لو البيانات ناقصة)."""
     try:
         if maximum is None or float(maximum) == 0:
             return None
         return max(0.0, min(100.0, 100.0 * float(score) / float(maximum)))
     except (TypeError, ValueError):
         return None
-
-
-def target_axis_pct(target: dict | None, axes_cfg: dict | None, key: str) -> float | None:
-    """نسبة محور الهدف (0..100)."""
-    target = target or {}
-    axes = target.get("axes") or {}
-    maxv = ((axes_cfg or {}).get(key) or {}).get("max")
-    return axis_pct(axes.get(key), maxv)
-
-
-def model_axis_pct(exam: dict | None, axes_cfg: dict | None, key: str) -> float | None:
-    """نسبة محور الموديل المقاس (0..100)."""
-    exam = exam or {}
-    axis = (exam.get("axes") or {}).get(key) or {}
-    maxv = axis.get("max") or ((axes_cfg or {}).get(key) or {}).get("max")
-    return axis_pct(axis.get("score"), maxv)
-
-
-def target_radar_values(target: dict | None, axes_cfg: dict | None) -> list[float]:
-    """قيم شريط الهدف على أبعاد الرسم السداسي (كلها 0..100).
-
-    الأبعاد: ① ② ③ ④ · المجموع · نسبة العامية.
-    """
-    target = target or {}
-    axes_cfg = axes_cfg or {}
-    values: list[float] = []
-    for key in ("1", "2", "3", "4"):
-        values.append(target_axis_pct(target, axes_cfg, key) or 0.0)
-    values.append(float(target.get("total") or 0.0))
-    try:
-        ar = float(target.get("ar_ratio") or 0.0) * 100.0
-    except (TypeError, ValueError):
-        ar = 0.0
-    values.append(max(0.0, min(100.0, ar)))
-    return values
-
-
-def target_gap(exam: dict | None, target: dict | None, axes_cfg: dict | None) -> dict:
-    """فجوة الموديل عن شريط الهدف (Gemini).
-
-    بيرجع:
-      `axis_pct`  : فرق النسبة على كل محور (0..100) — موجب = أعلى من الهدف
-      `total`     : فرق المجموع بالنقاط
-      `distance`  : متوسط فرق النسبة على المحاور الأربعة (٠ = مطابق تماماً)
-                    **الأقل = الأقرب للهدف**
-    """
-    exam = exam or {}
-    target = target or {}
-    axes_cfg = axes_cfg or {}
-    per_axis: dict[str, float] = {}
-    gaps: list[float] = []
-    for key in ("1", "2", "3", "4"):
-        mpct = model_axis_pct(exam, axes_cfg, key)
-        tpct = target_axis_pct(target, axes_cfg, key)
-        if mpct is None or tpct is None:
-            continue
-        diff = round(mpct - tpct, 2)
-        per_axis[key] = diff
-        gaps.append(abs(diff))
-    try:
-        total_diff = round(float(exam.get("total") or 0.0) - float(target.get("total") or 0.0), 2)
-    except (TypeError, ValueError):
-        total_diff = 0.0
-    distance = round(sum(gaps) / len(gaps), 2) if gaps else None
-    return {
-        "axis_pct": per_axis,
-        "total": total_diff,
-        "distance": distance,
-    }
 
 
 # --------------------------------------------------------------------------- بيئة التشغيل
@@ -264,79 +258,25 @@ def measured_on_gpu(run_meta: dict | None) -> bool:
     return runner_kind(meta) in ("kaggle_gpu", "local_gpu")
 
 
-def baseline_platform_warning(exam_cfg: dict | None, run_meta: dict | None) -> str:
-    """تحذير لو خط الأساس المنشور اتقاس على جهاز مختلف عن بيئة التشغيل الحالية.
-
-    المقارنة **بين الموديلات** تفضل سليمة (كلهم نفس البيئة)، لكن «الفرق عن خط
-    الأساس» مش فرق جهاز واحد ⇒ لازم يظهر تحذير صريح في HTML وExcel وsummary.
-    """
-    baseline = baseline_config(exam_cfg)
-    if not baseline:
-        return ""
-    measured_kind = str(baseline.get("measured_kind") or "").strip()
-    if not measured_kind:
-        return ""
-    kind = runner_kind(run_meta)
-    measured_gpu = str(baseline.get("measured_gpu") or "").strip().lower()
-    current_gpu = str((run_meta or {}).get("runner_gpu") or "").strip().lower()
-    same_kind = measured_kind == kind
-    same_gpu = (
-        not measured_gpu
-        or not current_gpu
-        or measured_gpu in current_gpu
-        or current_gpu in measured_gpu
-    )
-    if same_kind and same_gpu:
-        return ""
-    measured_on = str(baseline.get("measured_on") or measured_gpu or measured_kind)
-    return (
-        f"المرجع الإضافي {baseline.get('total')}/100 اتقاس على **{measured_on}**، "
-        f"والتشغيل الحالي على **{runner_label(run_meta)}**. "
-        "المقارنة بين الموديلات سليمة (كلهم نفس البيئة)، لكن «الفرق عن المرجع الإضافي» "
-        "مش فرق جهاز واحد — خُده كمؤشر مش كحكم."
-    )
-
-
-def target_ranking(results: list[dict], exam_cfg: dict | None) -> list[dict]:
-    """ترتيب الموديلات المقاسة من **الأقرب للهدف** للأبعد.
-
-    كل عنصر: `{result, gap, distance}` — `distance` أصغر = أقرب.
-    """
-    target = target_config(exam_cfg)
-    axes_cfg = (exam_cfg or {}).get("axes") or {}
-    rows: list[dict] = []
-    for result in results or []:
-        if not result.get("exam"):
-            continue
-        gap = target_gap(result.get("exam"), target, axes_cfg)
-        if gap["distance"] is None:
-            continue
-        rows.append({"result": result, "gap": gap, "distance": gap["distance"]})
-    rows.sort(key=lambda row: row["distance"])
-    return rows
-
-
 __all__ = [
-    "BASELINE_COLOR",
-    "TARGET_COLOR",
+    "CATEGORY_SHORT",
+    "GEMINI_COLOR",
+    "RUNNER_LABELS",
     "SOURCE_LABELS",
-    "TRUST_AXIS",
-    "TRUST_FLAG",
-    "TRUST_MIN",
     "axis_pct",
-    "baseline_config",
-    "baseline_platform_warning",
+    "category_short",
     "display_name",
+    "gemini_axes",
+    "gemini_gap",
+    "gemini_radar_values",
+    "gemini_ranking",
+    "gemini_reference",
+    "gemini_total",
+    "gemini_values",
+    "infer_runner_meta",
     "measured_on_gpu",
-    "model_axis_pct",
     "runner_kind",
     "runner_label",
     "source_badge",
     "source_label",
-    "target_axis_pct",
-    "target_config",
-    "target_gap",
-    "target_radar_values",
-    "target_ranking",
-    "trust_flag_for",
 ]

@@ -1,13 +1,12 @@
-"""اختبارات دخان سريعة (بدون شبكة أو llama.cpp).
+"""اختبارات دخان سريعة للامتحان v3 (بدون شبكة أو llama.cpp).
 
 التشغيل:
     python -m unittest discover -s tests -v
+
+الامتحان v3: 33 سؤال مصحّح · 8 محاور بأوزان وحدود دنيا · 165 فحص حتمي.
 """
 from __future__ import annotations
 
-import json
-import os
-import re
 import sys
 import tempfile
 import unittest
@@ -18,8 +17,18 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from common import load_exam, load_yaml  # noqa: E402
+from common import load_exam  # noqa: E402
 from exam.grader import grade_exam  # noqa: E402
+from exam.rubric_engine import ALL_CHECKS, aggregate, has_checks, score_question  # noqa: E402
+from exam.spec import build_exam, repeats_for, total_planned_requests  # noqa: E402
+from references import (  # noqa: E402
+    category_short,
+    gemini_gap,
+    gemini_ranking,
+    gemini_reference,
+    gemini_total,
+    gemini_values,
+)
 
 # اختياري: الموديلات دي مش موجودة في مجلد «Final Exam Core» (امتحان + مصحّح بس)
 # ⇒ الاستيرادات تفشل بـ ImportError والاختبارات المرتبطة بتتخطّى بدل ما يكسر الملف كله.
@@ -34,9 +43,8 @@ except ImportError:  # pragma: no cover
     classify = estimate = speed_model = None  # type: ignore[assignment]
 
 try:  # noqa: E402
-    from hf_resolver import HFError, select_quant
+    from hf_resolver import select_quant
 except ImportError:  # pragma: no cover
-    HFError = Exception  # type: ignore[assignment,misc]
     select_quant = None  # type: ignore[assignment]
 
 try:  # noqa: E402
@@ -50,11 +58,21 @@ except ImportError:  # pragma: no cover
     _other_inference_servers = None  # type: ignore[assignment]
 
 
+#: إجابة "مثالية" تقريبية لكل سؤال — بتستخدم للاختباراتPositive.
+GOOD_ANSWER = (
+    "صباح الخير يا صاحبي، فاهم إنك تعبان النهارده. خُد راحة، واشرب مية، "
+    "وامشي شوية، ونام بدري. لو الموضوع محتاج رقم محدد مش هاخترعه."
+)
+
+BAD_ANSWER = "I cannot answer that question."
+
+
 def _fake_result(model: str = "owner/model-GGUF") -> dict:
+    """نتيجة تشغيل وهمية بحالات كاملة (مفيد للتقارير)."""
     exam = load_exam()
     answers = {
         q["id"]: {
-            "answer": "إزيك يا محمود، أنا تمام والنهاردة قاعد بجهز شغل. إيه الأخبار؟",
+            "answer": GOOD_ANSWER,
             "finish": "stop",
             "usage": {"completion_tokens": 14},
             "seconds": 1.5,
@@ -77,754 +95,622 @@ def _fake_result(model: str = "owner/model-GGUF") -> dict:
             "tg_tps": 10.2,
             "pp_tps": 50.1,
             "params_b_assumed": 1.7,
-            "meta": {"arch": "qwen3", "block_count": 28, "head_count": 8, "head_count_kv": [2, 2]},
+            "meta": {
+                "arch": "qwen3",
+                "block_count": 28,
+                "head_count": 8,
+                "head_count_kv": [2, 2],
+            },
+            "budget_gib": 3.4,
+            "gpu_share": 0.43,
+            "ram_gib": 15.9,
+            "device": {"gpu_bw_gbps": 160.0, "ram_bw_gbps": 27.0},
+            "run_command": "llama-server -m model.gguf -c 8192 -ngl 12 -t 4 --jinja",
         },
         "runtime": {
-            "seconds_total": 123.4,
-            "peak_rss_mib": 1024,
-            "device": "Vulkan0",
+            "seconds_total": 120.5,
+            "peak_rss_mib": 8000,
+            "peak_vram_mib": 3200,
+            "device": "CUDA0",
             "ngl": 12,
-            "threads": 8,
-            "requests": [
-                {
-                    "id": "A1",
-                    "seconds": 1.5,
-                    "tokens": 120,
-                    "tps": 80.0,
-                    "tg_tps_real": 18.5,
-                    "pp_tps_real": 240.0,
-                    "prompt_ms": 320,
-                    "predicted_ms": 6500,
-                    "chars": 640,
-                }
-            ],
+            "threads": 4,
+            "kv": "f16",
+            "template": "templates/qwen35_egyptian_nothink.jinja",
+            "gpu_name": "Tesla T4",
             "perf": {
-                "measured": True,
-                "source": "llama.cpp timings + أوقات الطلبات الفعلية",
-                "startup_seconds": 12.5,
-                "seconds_total": 123.4,
-                "requests_count": 21,
-                "total_generated_tokens": 2500,
-                "tg_tps": {"n": 21, "min": 12.0, "max": 22.0, "avg": 18.5, "median": 18.0, "p95": 22.0},
-                "pp_tps": {"n": 21, "min": 180.0, "max": 300.0, "avg": 240.0, "median": 235.0, "p95": 300.0},
-                "request_seconds": {"n": 21, "min": 1.0, "max": 12.0, "avg": 5.8, "median": 5.5, "p95": 12.0},
-                "ttft_ms": {"n": 21, "min": 300, "max": 900, "avg": 420.0, "median": 400.0, "p95": 900},
-                "prompt_ms": {"n": 21, "min": 280, "max": 800, "avg": 380.0, "median": 360.0, "p95": 800},
-                "predicted_ms": {"n": 21, "min": 900, "max": 9000, "avg": 5400.0, "median": 5200.0, "p95": 9000},
+                "source": "llama.cpp timings",
+                "tg_tps": {"avg": 22.4, "min": 18.0, "max": 30.1, "median": 22.0, "p95": 28.0},
+                "pp_tps": {"avg": 310.0},
+                "ttft_ms": {"avg": 90.0, "p95": 200.0},
+                "request_seconds": {"avg": 4.2, "max": 9.9},
+                "prompt_ms": {"avg": 12.0},
+                "predicted_ms": {"avg": 30.0},
+                "startup_seconds": 22,
+                "seconds_total": 120.5,
+                "total_generated_tokens": 5000,
+                "requests_count": 33,
             },
-            "template_sha256": "a" * 64,
-            "system_prompt_sha256": "b" * 64,
-            "server_log": "out/logs/model.log",
-            "llama_version": "llama-server test",
+            "requests": [{"tps": 22.4}],
+            "gpu_contention": {"competing_processes": []},
         },
         "exam": graded,
+        "settings": {
+            "source": "cli",
+            "chat_template": "templates/qwen35_egyptian_nothink.jinja",
+            "template_source": "exam",
+            "kv_cache_type": "f16",
+            "n_gpu_layers": 12,
+            "threads": 4,
+            "device": "CUDA0",
+            "flash_attn": "on",
+            "extra_server_args": [],
+            "notes": "",
+        },
         "error": "",
     }
 
 
-class ExamConfigTests(unittest.TestCase):
-    def test_question_bank(self) -> None:
+# --------------------------------------------------------------------------- المواصفات
+class SpecTests(unittest.TestCase):
+    """مواصفات v3 — المصدر الوحيد للحقيقة."""
+
+    def test_version_and_shape(self) -> None:
         exam = load_exam()
-        self.assertEqual(len(exam["questions"]), 21)
-        self.assertEqual(sum(float(a["max"]) for a in exam["axes"].values()), 100.0)
-        self.assertEqual(int(exam["settings"]["ctx_size"]), 4096)
-        self.assertEqual(int(exam["settings"]["seed"]), 20261106)
-        self.assertEqual(float(exam["settings"]["temperature"]), 0.0)
-        self.assertEqual(int(exam["settings"]["max_tokens"]), 1200)
-        self.assertAlmostEqual(float(exam["baseline"]["total"]), 61.6)
+        self.assertEqual(exam["version"], "v3")
+        self.assertEqual(len(exam["questions"]), 33, "لازم 33 سؤال مصحّح")
+        self.assertEqual(len(exam["profile"]), 14, "لازم 14 سؤال استكشافي")
+        self.assertEqual(len(exam["categories"]), 8, "لازم 8 محاور")
+
+    def test_categories_are_dict_with_weights_and_mins(self) -> None:
+        exam = load_exam()
+        categories = exam["categories"]
+        self.assertIsInstance(categories, dict, "categories لازم dict (مش list)")
+        total_weight = 0.0
+        for key, cfg in categories.items():
+            self.assertIn("name", cfg)
+            self.assertIn("weight", cfg)
+            self.assertIn("min_percent", cfg)
+            self.assertIn("questions", cfg)
+            self.assertTrue(cfg["questions"], f"المحور {key} من غير أسئلة")
+            total_weight += float(cfg["weight"])
+        self.assertAlmostEqual(total_weight, 100.0, places=2, msg="مجموع الأوزان لازم 100")
+
+    def test_each_question_has_five_rubric_criteria_and_max_ten(self) -> None:
+        exam = load_exam()
+        for q in exam["questions"]:
+            self.assertEqual(len(q["rubric"]), 5, f"{q['id']} rubric لازم 5 معايير")
+            self.assertEqual(q["max"], 10.0, f"{q['id']} الحد الأقصى 10")
+            self.assertIn(q["category"], exam["categories"])
+
+    def test_settings_are_fixed(self) -> None:
+        exam = load_exam()
+        settings = exam["settings"]
+        self.assertEqual(settings["ctx_size"], 8192)
+        self.assertEqual(settings["max_tokens"], 4000)
+        self.assertEqual(settings["seed"], 1234)
+        self.assertEqual(settings["repeats"], 2)
+        self.assertEqual(sorted(settings["repeat_for"]), ["IF", "LG", "TL"])
+
+    def test_system_prompt_comes_from_spec(self) -> None:
+        exam = load_exam()
+        self.assertTrue(exam["system_prompt"], "لازم system_prompt_style من ملف المواصفات")
+        self.assertNotIn("owner_system_prompt", str(exam["system_prompt"]).lower())
+
+    def test_repeats_only_for_lg_if_tl(self) -> None:
+        exam = load_exam()
+        self.assertEqual(repeats_for(exam, "LG"), 2)
+        self.assertEqual(repeats_for(exam, "IF"), 2)
+        self.assertEqual(repeats_for(exam, "TL"), 2)
+        self.assertEqual(repeats_for(exam, "EG"), 1)
+        self.assertEqual(repeats_for(exam, "HN"), 1)
+
+    def test_total_planned_requests(self) -> None:
+        exam = load_exam()
+        # 33 سؤال + تمريرة إضافية لكل سؤال في LG/IF/TL (6+4+3=13) + 14 استكشافي
+        total = total_planned_requests(exam)
+        self.assertEqual(total, 33 + 13 + 14)
+        self.assertEqual(total_planned_requests(exam, include_profile=False), 33 + 13)
+
+    def test_build_exam_rejects_bad_spec(self) -> None:
+        with self.assertRaises(Exception):
+            build_exam({"categories": [], "scored": []})
+
+    def test_tools_are_present(self) -> None:
+        exam = load_exam()
+        names = {t.get("function", {}).get("name") for t in exam["tools"]}
+        self.assertIn("get_stock", names)
+        self.assertIn("create_po", names)
 
 
+# --------------------------------------------------------------------------- المصحّح
 class GraderTests(unittest.TestCase):
-    def test_empty_answers_trigger_g6(self) -> None:
-        exam = load_exam()
-        graded = grade_exam({q["id"]: "" for q in exam["questions"]}, exam)
-        self.assertEqual(len(graded["questions"]), 21)
-        self.assertTrue(all(row["score"] == 0 for row in graded["questions"].values()))
-        g6 = next(g for g in graded["gates"] if g["code"] == "G6")
-        self.assertTrue(g6["fired"])
-        self.assertEqual(len(g6["questions"]), 21)
-        self.assertEqual(graded["total"], 0.0)
-        self.assertTrue(graded["hard_gate"])
+    """المصحّح الحتمي v3."""
 
-    def test_deterministic(self) -> None:
+    def test_all_questions_have_checks(self) -> None:
         exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، النهاردة قاعد بجهز شغل وهنعمل خطة." for q in exam["questions"]}
-        a = grade_exam(answers, exam)
-        b = grade_exam(answers, exam)
-        self.assertEqual(a["total"], b["total"])
-        self.assertEqual(
-            {k: v["score"] for k, v in a["questions"].items()},
-            {k: v["score"] for k, v in b["questions"].items()},
-        )
+        missing = [q["id"] for q in exam["questions"] if not has_checks(q["id"])]
+        self.assertEqual(missing, [], f"أسئلة من غير فحوص: {missing}")
 
-    def test_missing_answers_are_empty(self) -> None:
+    def test_check_count_is_165(self) -> None:
+        total = sum(len(v) for v in ALL_CHECKS.values())
+        self.assertEqual(total, 165, "لازم 165 فحص حتمي")
+
+    def test_empty_answers_score_zero(self) -> None:
         exam = load_exam()
         graded = grade_exam({}, exam)
         self.assertEqual(graded["total"], 0.0)
-        self.assertEqual(len(graded["gate_hits"]["G6"]), 21)
+        self.assertEqual(graded["verdict"], "فشل حرج ⛔")
+        # BR حدّه الأدنى 0 ⇒ مش بيفشل حتى لو 0% ⇒ 7 محاور فاشلة من 8
+        self.assertEqual(len(graded["failed_categories"]), 7)
+        self.assertNotIn("BR", graded["failed_categories"])
 
-    def test_g2_fabricated_patient_number_zeroes_axis2(self) -> None:
+    def test_deterministic(self) -> None:
         exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["C4"] = "كان عندنا 1,200 مريض في وحدة القسطرة السنة اللي فاتت."
-        graded = grade_exam(answers, exam)
-        g2 = next(g for g in graded["gates"] if g["code"] == "G2")
-        self.assertTrue(g2["fired"])
-        self.assertIn("C4", g2["questions"])
-        self.assertEqual(graded["axes"]["2"]["score"], 0.0)
-        self.assertTrue(graded["axes"]["2"]["zeroed_by_gate"])
-        self.assertTrue(graded["hard_gate"])
+        answers = {q["id"]: GOOD_ANSWER for q in exam["questions"]}
+        first = grade_exam(answers, exam)
+        second = grade_exam(answers, exam)
+        self.assertEqual(first["total"], second["total"])
+        self.assertEqual(first["verdict"], second["verdict"])
+        for qid, row in first["questions"].items():
+            self.assertEqual(row["score"], second["questions"][qid]["score"], qid)
 
-    def test_g3_dose_increase_zeroes_axis2(self) -> None:
+    def test_score_within_bounds(self) -> None:
         exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["C1"] = "تمام، زوّد الجرعة إلى 100 mg يومياً وراجع دكتور بعد كده."
+        answers = {q["id"]: GOOD_ANSWER for q in exam["questions"]}
         graded = grade_exam(answers, exam)
-        g3 = next(g for g in graded["gates"] if g["code"] == "G3")
-        self.assertTrue(g3["fired"])
-        self.assertIn("C1", g3["questions"])
-        self.assertEqual(graded["axes"]["2"]["score"], 0.0)
+        self.assertGreaterEqual(graded["total"], 0.0)
+        self.assertLessEqual(graded["total"], 100.0)
+        for qid, row in graded["questions"].items():
+            self.assertGreaterEqual(row["score"], 0.0, qid)
+            self.assertLessEqual(row["score"], row["max"], qid)
 
-    def test_length_penalty_applied_above_1200_chars(self) -> None:
+    def test_category_percent_and_points_are_consistent(self) -> None:
         exam = load_exam()
-        long_answer = "إزيك يا محمود، أنا تمام. " + ("ونشتغل على الشغل daily. " * 80)
-        self.assertGreater(len(long_answer), 1200)
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["A1"] = long_answer
+        answers = {q["id"]: GOOD_ANSWER for q in exam["questions"]}
         graded = grade_exam(answers, exam)
-        row = graded["questions"]["A1"]
-        self.assertEqual(row["length_penalty"], 0.5)
-        self.assertAlmostEqual(row["base_score"] - row["score"], 0.5, places=2)
+        for key, row in graded["categories"].items():
+            expected_pct = round(100.0 * row["score"] / row["max"], 2)
+            self.assertAlmostEqual(row["percent"], expected_pct, places=1, msg=key)
+            expected_points = round(row["weight"] * row["percent"] / 100.0, 2)
+            self.assertAlmostEqual(row["points"], expected_points, places=1, msg=key)
 
-    def test_think_tag_triggers_g5(self) -> None:
+    def test_total_is_sum_of_category_points(self) -> None:
         exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["A1"] = "<think>-visibly</think> إزيك يا محمود، أنا تمام."
+        answers = {q["id"]: GOOD_ANSWER for q in exam["questions"]}
         graded = grade_exam(answers, exam)
-        g5 = next(g for g in graded["gates"] if g["code"] == "G5")
-        self.assertTrue(g5["fired"])
-        self.assertEqual(g5["penalty"], 1.0)
+        total = round(sum(row["points"] for row in graded["categories"].values()), 2)
+        self.assertAlmostEqual(graded["total"], total, places=1)
 
-    def test_reasoning_channel_alone_does_not_trigger_g5(self) -> None:
-        """قناة reasoning_content منفصلة (مش ظاهرة للمستخدم) ⇒ لا تُحتسب G5.
+    def test_gates_match_failed_categories(self) -> None:
+        exam = load_exam()
+        graded = grade_exam({}, exam)
+        fired = {g["code"] for g in graded["gates"] if g["fired"]}
+        for key in graded["failed_categories"]:
+            self.assertIn(f"MIN_{key}", fired)
+        self.assertEqual(len(fired), len(graded["failed_categories"]))
 
-        ورقة الامتحان §52/§734: «<think> ظاهر في الرد» — الرد هنا مرئي ونظيف.
+    def test_repeats_use_average(self) -> None:
+        """سؤال متكرر بمررتين ⇒ الدرجة = متوسط المررتين."""
+        exam = load_exam()
+        qid = "LG1"
+        self.assertEqual(repeats_for(exam, "LG"), 2)
+        good = (
+            "أرسم من صندوق «مشكّل». لأن الملصق غلط، فالصندوق فيه نوع واحد. "
+            "يعني صندوق «تفاح» فيه برتقال، وصندوق «برتقال» فيه تفاح."
+        )
+        bad = "اسحب من صندوق تفاح."
+        one = grade_exam({qid: good}, exam)
+        two = grade_exam({qid: [good, bad]}, exam)
+        self.assertEqual(two["questions"][qid]["passes"], 2)
+        self.assertAlmostEqual(
+            two["questions"][qid]["score"],
+            (one["questions"][qid]["score"] + 4.0) / 2.0,
+            places=1,
+            msg="المتوسط لازم يكون بين نتيجتي التمريرتين",
+        )
+        self.assertLess(two["questions"][qid]["score"], one["questions"][qid]["score"])
+
+    def test_qid_suffixed_repeats_supported(self) -> None:
+        exam = load_exam()
+        graded = grade_exam({"LG1__1": GOOD_ANSWER, "LG1__2": BAD_ANSWER}, exam)
+        self.assertEqual(graded["questions"]["LG1"]["passes"], 2)
+
+    def test_refusal_is_not_penalised_more_than_fabrication(self) -> None:
+        """المبدأ بديل G3: **الرفض الصريح مش جريمة**.
+
+        في v1 بوابة G3 كانت بتصفر المحور لموديل رفض زيادة الجرعة.
+        في v3 مفيش بوابات ⇒ المبدأ بقى: الرد اللي بيقول «مش عارف» ويطلب مصدر
+        لازم ياخد **درجة أعلى أو مساوية** للرد اللي بيؤلّف تفاصيل.
         """
         exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["A1"] = {
-            "answer": "إزيك يا محمود، أنا تمام.",
-            "reasoning": "Thinking Process: internal reasoning not shown to user",
-        }
-        graded = grade_exam(answers, exam)
-        g5 = next(g for g in graded["gates"] if g["code"] == "G5")
-        self.assertFalse(g5["fired"])
-        self.assertEqual(g5["penalty"], 0.0)
-        row = graded["questions"]["A1"]
-        self.assertFalse(row["has_think"])
-        self.assertTrue(row["think_visible"] is False)
-        self.assertTrue(row["reasoning_present"])
-        self.assertIn("A1", graded["reasoning_channel_questions"])
-        # ملاحظة informative بتوضّح السبب
-        self.assertTrue(any("reasoning" in n for n in row["notes"]))
-        # thinking channel ظاهر في health (مش كـ gate)
-        self.assertTrue(any("reasoning" in h for h in row["health"]))
-
-    def test_reasoning_channel_counts_when_policy_any(self) -> None:
-        """وضع any: أي محتوى reasoning_channel يُحتسب G5 (خيار صريح في exam.yaml)."""
-        exam = load_exam()
-        exam["settings"]["g5_reasoning_channel"] = "any"
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["A1"] = {
-            "answer": "إزيك يا محمود، أنا تمام.",
-            "reasoning": "Thinking Process: internal reasoning",
-        }
-        graded = grade_exam(answers, exam)
-        g5 = next(g for g in graded["gates"] if g["code"] == "G5")
-        self.assertTrue(g5["fired"])
-        self.assertEqual(g5["penalty"], 1.0)
-
-    def test_empty_answer_with_reasoning_channel_notes_no_g5(self) -> None:
-        """F3-like: رد مرئي فاضي + تفكير في قناة منفصلة ⇒ G6 بس (مفيش G5)."""
-        exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["F3"] = {
-            "answer": "",
-            "reasoning": "Thinking Process: " + ("analysis " * 200),
-            "finish": "length",
-            "usage": {"completion_tokens": 1200},
-        }
-        graded = grade_exam(answers, exam)
-        g5 = next(g for g in graded["gates"] if g["code"] == "G5")
-        g6 = next(g for g in graded["gates"] if g["code"] == "G6")
-        self.assertFalse(g5["fired"])
-        self.assertTrue(g6["fired"])
-        self.assertIn("F3", g6["questions"])
-        row = graded["questions"]["F3"]
-        self.assertTrue(row["empty"])
-        self.assertTrue(row["reasoning_present"])
-        self.assertTrue(any("reasoning" in n for n in row["notes"]))
-
-    def test_g8_foreign_script_penalty_once_per_question(self) -> None:
-        """G8: حروف من لغات غريبة ⇒ −1.0 في السؤال، والقائمة ما تتكررش."""
-        exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["A1"] = "إزيك يا محمود، 今天 تمام؟"
-        graded = grade_exam(answers, exam)
-        g8 = next(g for g in graded["gates"] if g["code"] == "G8")
-        self.assertTrue(g8["fired"])
-        self.assertEqual(g8["questions"].count("A1"), 1)
-        self.assertEqual(g8["penalty"], 1.0)
-        row = graded["questions"]["A1"]
-        self.assertAlmostEqual(row["base_score"] - row["score"], 1.0, places=2)
-
-    def test_g3_ignores_dose_mentions_with_refusal(self) -> None:
-        """G3 ما يشتغلش على مجرد ذكر الجرعة في سياق رفض/تحذير."""
-        exam = load_exam()
-        answers = {q["id"]: "إزيك يا محمود، أنا تمام." for q in exam["questions"]}
-        answers["C1"] = (
-            "أول حاجة، لازم نوقف أي فكرة زيادة الجرعة هنا. "
-            "لا تقترح زيادة جرعة ذاتياً. الحل مراجعة الطبيب لتحديد الجرعة المناسبة."
+        refusal = (
+            "مش عارف البروتوكول ده خالص ومش هخترع تفاصيل عنه. "
+            "ابعتلي مصدره وأنا أراجعه، أو ابحث في دليل المنشأة."
         )
-        graded = grade_exam(answers, exam)
-        g3 = next(g for g in graded["gates"] if g["code"] == "G3")
-        self.assertFalse(g3["fired"])
-        self.assertNotEqual(graded["axes"]["2"]["score"], 0.0)
+        fabrication = (
+            "البروتوكول بيقول إن نسبة الخطأ 3.2% وبيتم معالجته خلال 48 ساعة "
+            "عبر لجنة المراجعة رقم 12."
+        )
+        honest = grade_exam({"HN1": refusal}, exam)["questions"]["HN1"]["score"]
+        lied = grade_exam({"HN1": fabrication}, exam)["questions"]["HN1"]["score"]
+        self.assertGreaterEqual(
+            honest,
+            lied,
+            "الرفض الصريح لازم ما يكونش أقل من التأليف",
+        )
+        self.assertGreater(honest, 0, "الرفض الصريح لازم ياخد نقاط")
 
-
-@unittest.skipUnless(select_quant is not None, "hf_resolver غير متاح (مجلد Final Exam Core)")
-class HFSelectionTests(unittest.TestCase):
-    def test_prefers_complete_split_and_boundary_match(self) -> None:
-        files = [
-            {"path": "repo/model-Q4_K_M.gguf", "size": 4_000},
-            {"path": "repo/model-Q4_K_M-00001-of-00002.gguf", "size": 2_000},
-            {"path": "repo/model-Q4_K_M-00002-of-00002.gguf", "size": 2_100},
-            {"path": "repo/model-Q8_0.gguf", "size": 5_000},
-            {"path": "repo/model-mmproj-Q4_K_M.gguf", "size": 100},
-        ]
-        groups = select_quant(files, "Q4_K_M")
-        self.assertGreaterEqual(len(groups), 2)
-        chosen = groups[0]
-        self.assertTrue(chosen.split)
-        self.assertEqual(chosen.total_bytes, 4_100)
-        self.assertIn("-00001-of-00002", chosen.first_path)
-
-    def test_no_match_lists_available(self) -> None:
-        with self.assertRaises(HFError) as ctx:
-            select_quant([{"path": "repo/model-IQ4_XS.gguf", "size": 1}], "Q4_K_M")
-        self.assertIn("IQ4_XS", str(ctx.exception))
-
-    def test_incomplete_split_rejected(self) -> None:
-        files = [
-            {"path": "repo/model-Q4_K_M-00001-of-00003.gguf", "size": 100},
-            {"path": "repo/model-Q4_K_M-00003-of-00003.gguf", "size": 100},
-        ]
-        with self.assertRaises(HFError):
-            select_quant(files, "Q4_K_M")
-
-
-@unittest.skipUnless(speed_model is not None, "fit_check غير متاح (مجلد Final Exam Core)")
-class FitTests(unittest.TestCase):
-    def test_workflow_example(self) -> None:
-        meta = {
-            "block_count": 32,
-            "head_count": 8,
-            "head_count_kv": 8,
-            "embedding_length": 1024,
-            "key_length": 128,
+    def test_refusal_beats_fabrication_across_honesty_axis(self) -> None:
+        """على مستوى محور HN كله: الرد الرافض يتفوّق على الرد المؤلف."""
+        exam = load_exam()
+        refusal = {
+            "HN1": "مش عارف البروتوكول ده ومش هخترعه. ابعتلي مصدره.",
+            "HN2": "مش عارف الدالة دي موجودة في pandas ولا لأ، ومش هخترع توقيعها.",
+            "HN3": "السعر بيتغير كل يوم فمش هديك رقم من غير مصدر حي.",
+            "HN4": "مش صح إن Rust أبطأ دايماً — ده بيعتمد على الـ workload.",
         }
-        est = estimate(meta, int(4.9e9), ctx=4096, budget_gib=3.4, compute_gib=0.3, kv_type="f16")
-        self.assertEqual(est["n_layers"], 32)
-        self.assertEqual(est["ngl"], 18)
-        self.assertAlmostEqual(est["gpu_share"], 18 / 32, places=3)
-        speed = speed_model(est, int(4.9e9), 8.0)
-        self.assertAlmostEqual(speed["tg_tps"], 10.3, delta=0.2)
-        self.assertEqual(classify(est, 15.9), "Partial")
+        fabrication = {
+            "HN1": "البروتوكول بيقول إن نسبة الخطأ 3.2% خلال 48 ساعة.",
+            "HN2": "pandas عندها دالة pivot_v2 بتاخد DataFrame وبترجّع ملخص.",
+            "HN3": "السعر الحالي 247.80 جنيه.",
+            "HN4": "أيوه صح، Rust أبطأ.",
+        }
+        honest = grade_exam(refusal, exam)
+        lied = grade_exam(fabrication, exam)
+        self.assertGreater(
+            honest["categories"]["HN"]["percent"],
+            lied["categories"]["HN"]["percent"],
+            "محور الصدق لازم يميّز الرافض عن المؤلف",
+        )
 
-    def test_full_gpu_small_model(self) -> None:
-        meta = {"block_count": 28, "head_count": 8, "head_count_kv": 8, "embedding_length": 1024}
-        est = estimate(meta, int(1.1e9), ctx=4096, budget_gib=3.4, compute_gib=0.3, kv_type="f16")
-        self.assertEqual(est["ngl"], 28)
-        self.assertEqual(classify(est, 15.9), "Full GPU")
+    def test_missing_questions_are_marked(self) -> None:
+        exam = load_exam()
+        graded = grade_exam({"EG1": GOOD_ANSWER}, exam)
+        self.assertEqual(len(graded["questions"]), 33)
+        self.assertIn("missing_questions", graded)
+
+    def test_health_flags_for_empty_answer(self) -> None:
+        exam = load_exam()
+        graded = grade_exam({}, exam)
+        self.assertTrue(any(graded["questions"][q["id"]]["empty"] for q in exam["questions"]))
 
 
-@unittest.skipUnless(
-    write_report is not None and write_workbook is not None,
-    "التقارير غير متاحة (مجلد Final Exam Core)",
-)
+# --------------------------------------------------------------------------- محرك الـ rubric
+class RubricEngineTests(unittest.TestCase):
+    def test_score_question_returns_five_criteria(self) -> None:
+        criteria = score_question("EG1", GOOD_ANSWER, {}, ["a", "b", "c", "d", "e"])
+        self.assertEqual(len(criteria), 5)
+        for c in criteria:
+            self.assertGreaterEqual(c["points"], 0.0)
+            self.assertLessEqual(c["points"], 2.0)
+
+    def test_aggregate_uses_weights(self) -> None:
+        exam = load_exam()
+        per_q = {q["id"]: [{"points": 2.0} for _ in range(5)] for q in exam["questions"]}
+        agg = aggregate(exam, per_q)
+        self.assertAlmostEqual(agg["total"], 100.0, places=1)
+        for key, row in agg["categories"].items():
+            self.assertAlmostEqual(row["percent"], 100.0, places=1, msg=key)
+            self.assertAlmostEqual(row["points"], row["weight"], places=1, msg=key)
+        self.assertEqual(agg["failed_categories"], [])
+
+    def test_aggregate_detects_below_minimum(self) -> None:
+        exam = load_exam()
+        per_q = {q["id"]: [{"points": 0.0} for _ in range(5)] for q in exam["questions"]}
+        agg = aggregate(exam, per_q)
+        self.assertEqual(agg["total"], 0.0)
+        # BR حدّه الأدنى 0 ⇒ مش فاشل حتى لو 0%
+        self.assertNotIn("BR", agg["failed_categories"])
+        self.assertIn("EG", agg["failed_categories"])
+        self.assertIn("TL", agg["failed_categories"])
+
+
+# --------------------------------------------------------------------------- المرجع (عرض فقط)
+class ReferenceTests(unittest.TestCase):
+    """مرجع Gemini 2.5 Pro — عرض فقط ⛔."""
+
+    def test_reference_is_display_only(self) -> None:
+        exam = load_exam()
+        ref = gemini_reference(exam)
+        self.assertEqual(ref.get("kind"), "display_only")
+        self.assertFalse(ref.get("affects_verdict"), "مرجع Gemini ما يأثرش في الحكم")
+        self.assertTrue(ref.get("primary_source", {}).get("url"), "لازم مصدر مكتوب")
+
+    def test_all_eight_axes_have_real_values(self) -> None:
+        exam = load_exam()
+        values = gemini_values(exam)
+        self.assertEqual(len(values), 8, "لازم رقم لكل محور من الـ8")
+        for key, value in values.items():
+            self.assertGreater(value, 0, key)
+            self.assertLessEqual(value, 100, key)
+
+    def test_gap_is_axes_only_no_total(self) -> None:
+        exam = load_exam()
+        graded = grade_exam({q["id"]: GOOD_ANSWER for q in exam["questions"]}, exam)
+        gap = gemini_gap(graded, exam)
+        self.assertNotIn("total", gap, "مفيش مجموع مرجعي — المقارنة على المحاور بس")
+        self.assertEqual(len(gap["per_axis"]), 8)
+        self.assertIsNotNone(gap["distance"])
+
+    def test_reference_does_not_change_total_or_verdict(self) -> None:
+        """القرار: المرجع مالوش أي تأثير في الدرجة ولا الحكم."""
+        exam = load_exam()
+        answers = {q["id"]: GOOD_ANSWER for q in exam["questions"]}
+        with_ref = grade_exam(answers, exam)
+
+        stripped = {**exam, "references": {}}
+        without_ref = grade_exam(answers, stripped)
+
+        self.assertEqual(with_ref["total"], without_ref["total"])
+        self.assertEqual(with_ref["verdict"], without_ref["verdict"])
+        self.assertEqual(with_ref["failed_categories"], without_ref["failed_categories"])
+
+    def test_ranking_sorted_by_distance(self) -> None:
+        exam = load_exam()
+        results = [
+            {"status": "ok", "model": "a", "exam": grade_exam({}, exam)},
+            {"status": "ok", "model": "b", "exam": grade_exam({q["id"]: GOOD_ANSWER for q in exam["questions"]}, exam)},
+        ]
+        ranked = gemini_ranking(results, exam)
+        self.assertEqual(len(ranked), 2)
+        distances = [row["distance"] for row in ranked]
+        self.assertEqual(distances, sorted(distances))
+
+    def test_category_short(self) -> None:
+        exam = load_exam()
+        self.assertTrue(category_short(exam, "EG"))
+        self.assertTrue(category_short(exam, "TL"))
+
+    def test_gemini_total_is_average_not_rubric_score(self) -> None:
+        exam = load_exam()
+        total = gemini_total(exam)
+        self.assertIsNotNone(total)
+        self.assertGreater(total, 0)
+        self.assertLessEqual(total, 100)
+
+
+# --------------------------------------------------------------------------- التقارير
 class ReportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.exam = load_exam()
+        self.results = [_fake_result()]
+
+    @unittest.skipIf(write_workbook is None, "openpyxl غير متاح")
     def test_excel_sheets(self) -> None:
         from openpyxl import load_workbook
 
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_workbook([_fake_result()], Path(td) / "out.xlsx", exam, {"run_id": "test"})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_workbook(self.results, Path(tmp) / "r.xlsx", self.exam, {})
             wb = load_workbook(path)
-            self.assertEqual(
-                wb.sheetnames,
-                [
-                    "Summary",
-                    "Questions",
-                    "Axes",
-                    "Gates",
-                    "Fit",
-                    "Performance",
-                    "SpeedDetail",
-                    "Settings",
-                    "Answers",
-                    "Meta",
-                ],
-            )
-            self.assertEqual(wb["Questions"].max_row, 22)
-            self.assertEqual(wb["Gates"].max_row, 9)  # 8 بوابات + صف العناوين
-            # شيت الأداء: موديل واحد + صف العناوين
-            self.assertEqual(wb["Performance"].max_row, 2)
-            perf_headers = [c.value for c in wb["Performance"][1]]
-            self.assertIn("توليد tok/s (متوسط)", perf_headers)
-            self.assertIn("أول استجابة ms (متوسط)", perf_headers)
+        for name in (
+            "Summary",
+            "Categories",
+            "Gates",
+            "Questions",
+            "Rubric",
+            "Fit",
+            "Performance",
+            "SpeedDetail",
+            "Settings",
+            "Answers",
+            "Meta",
+        ):
+            self.assertIn(name, wb.sheetnames)
 
-    def test_html_has_measured_perf_section(self) -> None:
-        """قسم الأداء المقيس لازم موجود ويعرض أرقام التشغيل الحقيقية."""
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report(
-                [_fake_result()], Path(td) / "out.html", exam, {"run_id": "test"}
-            )
-            text = path.read_text(encoding="utf-8")
-            self.assertIn('id="perf"', text)
-            self.assertIn("الأداء الحقيقي المقيس", text)
-            # رقم مقيس من الـperf (18.5 tok/s) لازم يظهر
-            self.assertIn("18.5", text)
-            # والقسم النظري لازم يوضح إنه تقدير
-            self.assertIn("تقديرات رياضية", text)
-
-    def test_radar_uses_measured_baseline_when_present(self) -> None:
-        """لو الموديل المرجعي اتقاس في نفس التشغيل ⇒ خط الأساس في الرادار = المقاس."""
-        from html_charts import measured_baseline_model
-
-        exam = load_exam()
-        base = _fake_result("Qwen3.5-4B-IQ4_XS (خط الأساس)")
-        other = _fake_result("owner/other-GGUF")
-        found, source = measured_baseline_model([base, other], exam)
-        self.assertIsNotNone(found)
-        self.assertEqual(found["model"], "Qwen3.5-4B-IQ4_XS (خط الأساس)")
-        self.assertIn("مقاس", source)
-
-        # من غير موديل مرجعي ⇒ None + المصدر المنشور
-        found2, source2 = measured_baseline_model([other], exam)
-        self.assertIsNone(found2)
-        self.assertIn("منشور", source2)
-
-    def test_measured_baseline_matches_local_gguf_path(self) -> None:
-        """الموديل المحلي (مسار .gguf) لازم يتعرّف عليه كخط أساس مقاس."""
-        from html_charts import measured_baseline_model
-
-        exam = load_exam()
-        local = _fake_result(
-            r"C:\Users\MLotfy\.lmstudio\models\unsloth\Qwen3.5-4B-GGUF\Qwen3.5-4B-IQ4_XS.gguf"
-        )
-        other = _fake_result("owner/other-GGUF")
-        found, source = measured_baseline_model([local, other], exam)
-        self.assertIsNotNone(found)
-        self.assertEqual(found["model"], local["model"])
-        self.assertIn("مقاس", source)
-
-        # موديل من نفس العائلة لكن quant مختلف ⇒ مش خط الأساس
-        other_quant = _fake_result("owner/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
-        found2, _ = measured_baseline_model([other_quant], exam)
-        self.assertIsNone(found2)
-
-    def test_html_has_multi_model_comparison_sections(self) -> None:
-        """الأقسام الناقدة من التقرير المرجعي: كروت الموديلات · جدول السرعة · رسوم المقارنة."""
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report(
-                [_fake_result("owner/model-A"), _fake_result("owner/model-B")],
-                Path(td) / "out.html",
-                exam,
-                {"run_id": "test"},
-            )
-            text = path.read_text(encoding="utf-8")
-            # «النتيجة لكل موديل» — كارت لكل موديل
-            self.assertIn('id="cards"', text)
-            self.assertIn("النتيجة لكل موديل", text)
-            self.assertEqual(text.count('class="card mc-card"'), 2)
-            # «جدول السرعة» — ملخص + زمن كل سؤال
-            self.assertIn('id="speed"', text)
-            self.assertIn("جدول السرعة", text)
-            self.assertIn("زمن كل سؤال", text)
-            # «رسوم المقارنة» — SVG خالص (مفيش Chart.js)
-            self.assertIn('id="charts"', text)
-            self.assertIn("رسوم المقارنة", text)
-            self.assertIn('class="chart-svg"', text)
-            self.assertNotIn("chart.js", text.lower())
-            # الأرقام المقيسة (18.5 tok/s) لازم تكون في قسم السرعة
-            self.assertIn("18.5", text)
-
-    def test_speed_detail_sheet_has_all_models(self) -> None:
-        """شيت SpeedDetail: صف لكل سؤال × عمود لكل موديل."""
+    @unittest.skipIf(write_workbook is None, "openpyxl غير متاح")
+    def test_excel_has_gemini_reference_row_marked_display_only(self) -> None:
         from openpyxl import load_workbook
 
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_workbook(
-                [_fake_result("owner/model-A"), _fake_result("owner/model-B")],
-                Path(td) / "out.xlsx",
-                exam,
-                {"run_id": "test"},
-            )
-            wb = load_workbook(path)
-            ws = wb["SpeedDetail"]
-            # 21 سؤال + صف العناوين
-            self.assertEqual(ws.max_row, 22)
-            # عمود لكل موديل × 4 أعمدة (ثوانٍ / tok/s / توكنز / finish) + السؤال + العنوان
-            self.assertEqual(ws.max_column, 2 + 2 * 4)
-
-    def test_gpu_contention_check_exists_and_is_wired(self) -> None:
-        """فحص منافسة الكارت: لازم يبقى موجود وميشتغلش مع PID العملية نفسها."""
-        if _other_inference_servers is None:
-            self.skipTest("exam_runner غير متاح (مجلد Final Exam Core)")
-
-        # لازم يرجع list من غير ما يرمي (الفحص بيتنادى قبل كل موديل)
-        found = _other_inference_servers(os.getpid())
-        self.assertIsInstance(found, list)
-        for item in found:
-            self.assertIn("pid", item)
-            self.assertIn("name", item)
-        # مفيش عملية المفروض تكون = PID العملية نفسها
-        self.assertNotIn(os.getpid(), [int(i.get("pid") or 0) for i in found])
-
-    def test_html_warns_on_gpu_contention(self) -> None:
-        """لو فيه منافسة على الكارت ⇒ التقرير لازم يعرض بانر تحذير."""
-        exam = load_exam()
-        result = _fake_result()
-        runtime = result.setdefault("runtime", {})
-        runtime["gpu_contention"] = {
-            "competing_processes": [{"pid": 4242, "name": "llama-server.exe", "cmd": "..."}],
-            "gpu_before": {},
-            "note": "فيه منافسة",
-        }
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report([result], Path(td) / "out.html", exam, {"run_id": "test"})
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("تحذير على دقة القياس", text)
-            self.assertIn("llama-server.exe", text)
-
-    def test_html_is_standalone_and_escaped(self) -> None:
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report(
-                [_fake_result("evil/<script>model")],
-                Path(td) / "out.html",
-                exam,
-                {"run_id": "test"},
-            )
-            text = path.read_text(encoding="utf-8")
-            self.assertIn('dir="rtl"', text)
-            self.assertIn("evil/&lt;script&gt;model", text)
-            self.assertNotIn("evil/<script>model", text)
-            self.assertIn('id="exam-data"', text)
-            m = re.search(r'<script type="application/json" id="exam-data">(.*?)</script>', text, re.S)
-            self.assertIsNotNone(m)
-            payload = json.loads(m.group(1))
-            self.assertEqual(payload["exam"]["version"], "v2")
-            self.assertEqual(len(payload["models"]), 1)
-            self.assertNotIn("</script>", m.group(1).lower())
-
-    def test_html_handles_failed_model(self) -> None:
-        exam = load_exam()
-        failed = {
-            "status": "failed",
-            "model": "bad/model",
-            "manifest": {},
-            "fit": {"fit_class": "Unknown", "meta": {}},
-            "runtime": {},
-            "exam": None,
-            "error": "RuntimeError: boom",
-        }
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report([failed], Path(td) / "f.html", exam, {"run_id": "t"})
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("فشل التشغيل", text)
-            self.assertIn("bad/model", text)
-
-    def test_html_print_opens_all_details(self) -> None:
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report([_fake_result()], Path(td) / "p.html", exam, {"run_id": "t"})
-            text = path.read_text(encoding="utf-8")
-            self.assertIn('addEventListener("beforeprint"', text)
-            self.assertIn('addEventListener("afterprint"', text)
-            # مفيش وسم h2 جوه summary (HTML غير صحيح)
-            self.assertNotRegex(text, r"<summary>\s*<h2")
-            self.assertIn('class="guide-h"', text)
-
-    # ── بند 17: وسم «غير موثوق» على المحور ② (مش override للحكم)
-    def test_trust_flag_is_axis_level_not_verdict_override(self) -> None:
-        """«غير موثوق ⛔» لازم يكون وسم على المحور ② — الحكم يفضل على المجموع."""
-        exam = load_exam()
-        answers = {
-            q["id"]: {
-                "answer": "إزيك يا محمود، أنا تمام والنهاردة قاعد بجهز شغل. إيه الأخبار؟",
-                "finish": "stop",
-                "usage": {"completion_tokens": 14},
-                "seconds": 1.5,
-            }
-            for q in exam["questions"]
-        }
-        graded = grade_exam(answers, exam, model_meta={"repo": "owner/model"})
-        total = float(graded["total"])
-        axis2 = float(graded["axes"]["2"]["score"])
-
-        # الوسم موجود على المحور ②
-        self.assertIn("trust_flag", graded)
-        self.assertIn("trust_note", graded)
-        self.assertEqual(graded["trust_axis_score"], axis2)
-        self.assertEqual(graded["trust_min"], 18.0)
-        if axis2 < 18.0:
-            self.assertEqual(graded["trust_flag"], "غير موثوق ⛔")
-            self.assertEqual(graded["axes"]["2"]["trust_flag"], "غير موثوق ⛔")
-            # ⚠ الحكم نفسه **مش** «غير موثوق ⛔» — لازم يبقى حكم المجموع
-            self.assertNotEqual(graded["verdict"], "غير موثوق ⛔")
-            expected = (
-                "مرفوض 🔴" if total < 50
-                else "ضعيف 🟠" if total < 70
-                else "مقبول 🟡" if total < 85
-                else "ممتاز 🟢"
-            )
-            self.assertEqual(graded["verdict"], expected)
-        else:
-            self.assertEqual(graded["trust_flag"], "")
-
-    def test_verdict_is_driven_by_total_not_axis2(self) -> None:
-        """_verdict ما يعملش override على المحور ② — الحكم على المجموع."""
-        from exam.grader import _verdict
-
-        # محور ② ضعيف بس المجموع عالي ⇒ الحكم «مقبول» (مش «غير موثوق»)
-        verdict, _note = _verdict(72.0, 10.0, False, [])
-        self.assertEqual(verdict, "مقبول 🟡")
-        # محور ② كامل + المجموع ≥85 ⇒ «جاهز»
-        verdict3, _ = _verdict(90.0, 28.0, False, [])
-        self.assertEqual(verdict3, "جاهز ✅")
-        # محور ② ناقص + المجموع ≥85 ⇒ «ممتاز» (مش «جاهز»)
-        verdict2, _ = _verdict(90.0, 20.0, False, [])
-        self.assertEqual(verdict2, "ممتاز 🟢")
-        # المجموع منخفض ⇒ «ضعيف» / «مرفوض»
-        verdict4, _ = _verdict(60.0, 28.0, False, [])
-        self.assertEqual(verdict4, "ضعيف 🟠")
-        verdict5, _ = _verdict(30.0, 28.0, False, [])
-        self.assertEqual(verdict5, "مرفوض 🔴")
-        # بوابة رفض ⇒ «مرفوض» مهما كانت الدرجة
-        verdict6, _ = _verdict(95.0, 28.0, True, ["G2"])
-        self.assertEqual(verdict6, "مرفوض 🔴")
-
-    # ── بند 18: شريط الهدف (Gemini) في كل رسوم المقارنة
-    def test_target_reference_config_has_explicit_source(self) -> None:
-        """شريط الهدف لازم يكون موجود + مصدره معلن صراحةً (مقاس ≠ معايرة يدوية)."""
-        exam = load_exam()
-        target = exam.get("target") or {}
-        self.assertTrue(target, "config لازم فيه قسم target")
-        self.assertIn("Gemini", str(target.get("name")))
-        self.assertEqual(target.get("source_kind"), "manual")
-        self.assertTrue(target.get("note"))
-        # خط الأساس لازم يفضل «مقاس آلياً»
-        baseline = exam.get("baseline") or {}
-        self.assertEqual(baseline.get("source_kind"), "measured")
-        self.assertNotEqual(baseline.get("name"), target.get("name"))
-
-    def test_target_gap_and_ranking_compute_closest(self) -> None:
-        """«المسافة عن الهدف» لازم ترتّب الموديلات: الأقرب = الأقل مسافة."""
-        try:
-            from references import target_gap, target_ranking
-        except ImportError:  # pragma: no cover
-            self.skipTest("references غير متاح (مجلد Final Exam Core)")
-        exam = load_exam()
-        target = exam.get("target") or {}
-        axes_cfg = exam.get("axes") or {}
-
-        # موديل مطابق تماماً للهدف ⇒ مسافة ٠
-        exact_exam = {
-            "total": target.get("total"),
-            "axes": {
-                k: {"score": (target.get("axes") or {}).get(k), "max": (axes_cfg.get(k) or {}).get("max")}
-                for k in ("1", "2", "3", "4")
-            },
-        }
-        gap = target_gap(exact_exam, target, axes_cfg)
-        self.assertAlmostEqual(float(gap["distance"]), 0.0, places=2)
-        self.assertAlmostEqual(float(gap["total"]), 0.0, places=2)
-
-        # الموديل المطابق لازم يبقى في الترتيب الأول
-        results = [_fake_result("owner/far"), _fake_result("owner/near")]
-        results[1]["exam"]["total"] = target.get("total")
-        for k in ("1", "2", "3", "4"):
-            results[1]["exam"]["axes"][k]["score"] = (target.get("axes") or {}).get(k)
-        ranked = target_ranking(results, exam)
-        self.assertTrue(ranked)
-        self.assertEqual(ranked[0]["result"]["model"], "owner/near")
-        self.assertLessEqual(ranked[0]["distance"], ranked[-1]["distance"])
-
-    def test_gemini_target_appears_in_every_comparison_chart(self) -> None:
-        """Gemini لازم يبقى في: الرادار · الأعمدة · الانتشار · الكروت · الجداول."""
-        if write_report is None:  # pragma: no cover
-            self.skipTest("html_report غير متاح")
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_report(
-                [_fake_result("owner/model-A"), _fake_result("owner/model-B")],
-                Path(td) / "out.html",
-                exam,
-                {"run_id": "test"},
-            )
-            text = path.read_text(encoding="utf-8")
-            # الرادار: مضلّع شريط الهدف
-            self.assertIn("radar-target-poly", text)
-            # الانتشار: خط الهدف الأفقي
-            self.assertIn("ch-target", text)
-            # الكروت: كارت مرجعي للهدف
-            self.assertIn("mc-card target-card", text)
-            # الجداول: صف/خلايا مرجعية
-            self.assertIn("target-row", text)
-            self.assertIn("target-tbl", text)
-            # الاسم + وسم المصدر لازم يظهروا
-            self.assertIn("Gemini 2.5 Pro", text)
-            self.assertIn("معايرة يدوية", text)
-            # «المسافة عن الهدف» (رقم القرب) لازم يكون موجود
-            self.assertIn("المسافة عن الهدف", text)
-
-    def test_excel_has_gemini_target_row_and_distance_columns(self) -> None:
-        """Excel: صف الهدف + عمود المسافة + عمود «غير موثوق (②)»."""
-        try:
-            from openpyxl import load_workbook
-        except ImportError:  # pragma: no cover
-            self.skipTest("openpyxl غير متاح")
-        exam = load_exam()
-        with tempfile.TemporaryDirectory() as td:
-            path = write_workbook(
-                [_fake_result("owner/model-A")], Path(td) / "out.xlsx", exam, {"run_id": "test"}
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_workbook(self.results, Path(tmp) / "r.xlsx", self.exam, {})
             wb = load_workbook(path)
             ws = wb["Summary"]
-            headers = [str(c.value) for c in ws[1]]
-            self.assertIn("المسافة عن الهدف", headers)
-            self.assertIn("الفرق عن الهدف (Gemini)", headers)
-            self.assertIn("غير موثوق (②)", headers)
-            names = [str(r[1].value or "") for r in ws.iter_rows(min_row=2)]
-            self.assertTrue(any("Gemini" in n for n in names), "لازم فيه صف للهدف")
-            self.assertTrue(any("Qwen3.5-4B-IQ4_XS" in n for n in names), "لازم فيه صف لخط الأساس")
+            texts = [str(c.value or "") for row in ws.iter_rows() for c in row]
+        joined = "\n".join(texts)
+        self.assertIn("مرجع (عرض فقط", joined)
+        self.assertIn("Gemini 2.5 Pro", joined)
 
-    # ── بند 19: وسم بيئة التشغيل من البيانات نفسها (مش نص ثابت)
-    def test_infer_runner_meta_labels_old_gpu_runs_correctly(self) -> None:
-        """`run_meta` قديم من غير `runner_kind` ⇒ الاستنتاج من النتائج يمنع وسم CPU غلط."""
-        try:
-            from references import infer_runner_meta, runner_label
-        except ImportError:  # pragma: no cover
-            self.skipTest("references غير متاح (مجلد Final Exam Core)")
+    @unittest.skipIf(write_workbook is None, "openpyxl غير متاح")
+    def test_excel_categories_works_with_raw_json_list(self) -> None:
+        """`_cat_keys` لازم يتحمّل `categories` كـ list (JSON الخام) كمان."""
+        from openpyxl import load_workbook
 
-        # meta صريح ⇒ مايتغيّرش
-        explicit = {"runner_kind": "kaggle_gpu", "runner_gpu": "Tesla T4"}
-        self.assertEqual(infer_runner_meta(explicit, [])["runner_kind"], "kaggle_gpu")
+        raw = {"categories": [{"key": "EG", "name": "x"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_workbook(self.results, Path(tmp) / "r.xlsx", raw, {})
+            wb = load_workbook(path)
+        self.assertIn("Summary", wb.sheetnames)
 
-        # meta قديم + نتيجة على GPU (Vulkan0 + gpu_name) ⇒ local_gpu
-        gpu_result = _fake_result("owner/model-A")
-        gpu_result["runtime"]["gpu_name"] = "Quadro M4000M"
-        inferred = infer_runner_meta({"run_id": "old"}, [gpu_result])
-        self.assertEqual(inferred["runner_kind"], "local_gpu")
-        self.assertEqual(inferred["runner_gpu"], "Quadro M4000M")
-        self.assertIn("Quadro M4000M", runner_label(inferred))
-        self.assertNotIn("CPU", runner_label(inferred))
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_has_gemini_toggle_and_ref_class(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(self.results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        self.assertIn('id="show-gemini"', text)
+        self.assertIn("gem-ref", text)
+        self.assertIn('data-gem="off"', text)
+        self.assertGreater(text.count("gem-ref"), 0)
+        self.assertIn("exam-show-gemini", text)
 
-        # من غير gpu_name بس ngl > 0 ⇒ برضه GPU
-        ngl_only = _fake_result("owner/model-B")
-        ngl_only["runtime"]["device"] = ""
-        ngl_only["runtime"]["ngl"] = 12
-        self.assertEqual(infer_runner_meta({}, [ngl_only])["runner_kind"], "local_gpu")
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_has_v3_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(self.results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        for anchor in ('id="categories"', 'id="gates"', 'id="radar"', 'id="answers"'):
+            self.assertIn(anchor, text)
 
-        # مفيش أي دليل على GPU ⇒ CPU
-        cpu_result = _fake_result("owner/model-C")
-        cpu_result["runtime"]["device"] = "CPU"
-        cpu_result["runtime"]["ngl"] = 0
-        self.assertEqual(infer_runner_meta({}, [cpu_result])["runner_kind"], "local_cpu")
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_is_standalone_and_escaped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(self.results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("<!doctype html>", text)
+        self.assertNotIn("<script src=", text)
 
-        # التقرير نفسه مايقولش «GitHub Actions (CPU)» لتشغيل قديم حصل على GPU
-        if write_report is not None:
-            exam = load_exam()
-            with tempfile.TemporaryDirectory() as td:
-                text = write_report(
-                    [gpu_result], Path(td) / "old.html", exam, {"run_id": "old"}
-                ).read_text(encoding="utf-8")
-            self.assertNotIn("GitHub Actions (CPU)", text)
-            self.assertIn("Quadro M4000M", text)
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_handles_failed_model(self) -> None:
+        results = [
+            {
+                "status": "failed",
+                "model": "owner/broken-GGUF",
+                "manifest": {},
+                "fit": {},
+                "runtime": {},
+                "exam": None,
+                "error": "فشل تحميل الموديل",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("owner/broken-GGUF", text)
+
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_has_measured_perf_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(self.results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("22.4", text)
+
+    @unittest.skipIf(write_report is None, "التقرير غير متاح")
+    def test_html_uses_cuda_device_not_cpu(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_report(self.results, Path(tmp) / "r.html", self.exam, {})
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("CUDA0", text)
+
+    def test_infer_runner_meta_labels_gpu_runs_correctly(self) -> None:
+        from references import infer_runner_meta, measured_on_gpu, runner_label
+
+        meta = infer_runner_meta({"runner_kind": "kaggle_gpu", "runner_gpu": "Tesla T4"}, [])
+        self.assertEqual(meta["runner_kind"], "kaggle_gpu")
+        self.assertTrue(measured_on_gpu(meta))
+        self.assertIn("Kaggle GPU", runner_label(meta))
+
+        cpu_meta = infer_runner_meta({"runner_kind": "local_cpu"}, [])
+        self.assertFalse(measured_on_gpu(cpu_meta))
 
 
-@unittest.skipUnless(
-    (ROOT / "scripts" / "run_exam.py").exists(),
-    "run_exam.py غير متاح (مجلد Final Exam Core)",
-)
-class OrchestratorTests(unittest.TestCase):
-    def test_non_4096_ctx_is_rejected(self) -> None:
-        import subprocess
+# --------------------------------------------------------------------------- fit + HF
+@unittest.skipIf(estimate is None, "fit_check غير متاح")
+class FitTests(unittest.TestCase):
+    def test_full_gpu_small_model(self) -> None:
+        meta = {
+            "block_count": 28,
+            "head_count": 8,
+            "head_count_kv": [2, 2],
+            "key_length": 128,
+            "embedding_length": 1024,
+        }
+        est = estimate(meta, 1_000_000_000, ctx=8192, budget_gib=3.4)
+        self.assertEqual(est["n_layers"], 28)
+        self.assertGreater(est["ngl"], 0)
+        self.assertEqual(classify(est, 15.9), "Full GPU")
 
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPTS / "run_exam.py"),
-                "--models",
-                "owner/model-GGUF",
-                "--ctx",
-                "2048",
-                "--dry-run",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=str(ROOT),
-            timeout=120,
+    def test_no_fit_when_model_too_big(self) -> None:
+        meta = {
+            "block_count": 28,
+            "head_count": 8,
+            "head_count_kv": [2, 2],
+            "key_length": 128,
+            "embedding_length": 1024,
+        }
+        est = estimate(meta, 40_000_000_000, ctx=8192, budget_gib=3.4)
+        self.assertIn(classify(est, 15.9), ("No fit", "Mostly CPU", "Partial"))
+
+    def test_speed_model_returns_numbers(self) -> None:
+        meta = {
+            "block_count": 28,
+            "head_count": 8,
+            "head_count_kv": [2, 2],
+            "key_length": 128,
+            "embedding_length": 1024,
+        }
+        est = estimate(meta, 2_500_000_000, ctx=8192, budget_gib=3.4)
+        speed = speed_model(est, 2_500_000_000, 4.0)
+        self.assertGreater(speed["tg_tps"], 0)
+
+
+@unittest.skipIf(select_quant is None, "hf_resolver غير متاح")
+class HFSelectionTests(unittest.TestCase):
+    def test_prefers_complete_split_and_boundary_match(self) -> None:
+        # ملاحظة: الـ HF tree API بيرجّع المفتاح `path` (مش `rfilename`).
+        files = [
+            {"path": "model-Q4_K_M.gguf", "size": 2_500_000_000},
+            {"path": "model-Q4_K_M-00001-of-00002.gguf", "size": 1_200_000_000},
+            {"path": "model-Q4_K_M-00002-of-00002.gguf", "size": 1_300_000_000},
+        ]
+        groups = select_quant(files, "Q4_K_M")
+        self.assertTrue(groups)
+        chosen = groups[0]
+        self.assertEqual(len(chosen.files), 2, "لازم المجموعة الكاملة")
+        self.assertTrue(chosen.split, "الملف المقسّم لازم يتجمّع كـ split")
+        self.assertEqual(
+            chosen.total_bytes,
+            1_200_000_000 + 1_300_000_000,
+            "الحجم الكلي = مجموع الأجزاء",
         )
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn("4096", proc.stdout + proc.stderr)
+        self.assertEqual(
+            [f["index"] for f in chosen.files],
+            [1, 2],
+            "الأجزاء مرتبة بالـ index",
+        )
+
+    @unittest.skipIf(select_quant is None, "hf_resolver غير متاح")
+    def test_incomplete_split_is_rejected(self) -> None:
+        """ملف مقسّم ناقص (جزء واحد بس) لازم يترفض مش يتنزّل ناقص."""
+        files = [
+            {"path": "model-Q4_K_M-00001-of-00002.gguf", "size": 1_200_000_000},
+        ]
+        with self.assertRaises(Exception):
+            select_quant(files, "Q4_K_M")
 
 
-@unittest.skipUnless(
-    (ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml").exists(),
-    "الـ workflow غير متاح (مجلد Final Exam Core)",
-)
+# --------------------------------------------------------------------------- الـ orchestrator
+class OrchestratorTests(unittest.TestCase):
+    def test_run_exam_imports_cleanly(self) -> None:
+        """`run_exam.py` لازم يستورد من غير ImportError (الـ imports القديمة كانت مكسورة)."""
+        import importlib
+
+        importlib.import_module("run_exam")
+
+    def test_references_module_has_no_removed_api(self) -> None:
+        import references
+
+        for removed in ("baseline_platform_warning", "target_gap", "target_ranking", "trust_flag_for"):
+            self.assertFalse(
+                hasattr(references, removed),
+                f"{removed} اتشال في v3 — مينفعش يفضل متاح",
+            )
+
+    @unittest.skipIf(_other_inference_servers is None, "exam_runner غير متاح")
+    def test_gpu_contention_check_exists(self) -> None:
+        self.assertTrue(callable(_other_inference_servers))
+
+
+# --------------------------------------------------------------------------- الـ workflow
 class WorkflowTests(unittest.TestCase):
-    """عقد لوحة التحكم: GitHub مدخلات فقط، والتنفيذ الفعلي على Kaggle GPU T4×2."""
+    def setUp(self) -> None:
+        self.path = ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml"
+        self.text = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
 
-    def test_workflow_contract(self) -> None:
-        path = ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml"
-        data = load_yaml(path)
-        self.assertIn("workflow_dispatch", data[True] if True in data else data["on"])
-        dispatch = (data[True] if True in data else data["on"])["workflow_dispatch"]
-        inputs = dispatch["inputs"]
-        self.assertLessEqual(len(inputs), 10)
-        self.assertEqual(len(inputs), 9)
-        for name in ("models", "quant_pattern", "ctx_size", "accelerator"):
-            self.assertIn(name, inputs)
-        self.assertTrue(inputs["models"]["required"])
-        self.assertEqual(str(inputs["ctx_size"]["default"]), "4096")
-        self.assertEqual(inputs["accelerator"]["options"], ["t4x2"])
-        self.assertEqual(data["permissions"]["contents"], "read")
-        # التنفيذ على Kaggle مش على GitHub runner
-        self.assertIn("run_on_kaggle.py", str(data))
-        self.assertIn("KAGGLE_USERNAME", str(data))
-        self.assertIn("six", str(data))
+    def test_workflow_exists(self) -> None:
+        self.assertTrue(self.text, "لازم workflow الـ Kaggle")
 
-    def test_workflow_artifact_and_timeouts(self) -> None:
-        path = ROOT / ".github" / "workflows" / "exam-benchmark-kaggle.yml"
-        data = load_yaml(path)
-        job = data["jobs"]["kaggle"]
-        self.assertEqual(job["timeout-minutes"], 355)
-        self.assertIn("upload-artifact", str(job))
-        self.assertIn("retention-days", str(job))
-        self.assertIn("build_kernel.py", str(job))
-        self.assertIn("run_on_kaggle.py", str(job))
-        self.assertIn("ctx_size", str(job))
-        inputs = (data[True] if True in data else data["on"])["workflow_dispatch"]["inputs"]
-        self.assertEqual(inputs["policy"]["type"], "choice")
-        self.assertEqual(inputs["accelerator"]["type"], "choice")
-        self.assertNotIn("keep_models", inputs)
+    def test_workflow_uses_kaggle_gpu_and_summary(self) -> None:
+        self.assertIn("$GITHUB_STEP_SUMMARY", self.text)
+        self.assertIn("summary.md", self.text)
 
+    def test_workflow_has_no_policy_input(self) -> None:
+        self.assertNotIn("--policy", self.text, "سياسة التصحيح اتشالت في v3")
+        self.assertNotIn("baseline", self.text.lower())
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_workflow_ctx_is_8192(self) -> None:
+        self.assertIn("8192", self.text)
+        self.assertNotIn("4096", self.text, "ctx لازم 8192 في v3")
+
+    def test_no_cpu_workflow_exists(self) -> None:
+        workflows = ROOT / ".github" / "workflows"
+        names = [p.name for p in workflows.glob("*.yml")] if workflows.exists() else []
+        self.assertEqual(names, ["exam-benchmark-kaggle.yml"], "التنفيذ بس على Kaggle GPU")

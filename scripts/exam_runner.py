@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -38,6 +39,25 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _server_env(server: Path) -> dict:
+    """بيئة تشغيل `llama-server` مع تضمين مجلد الـ bin في مسار المكتبات.
+
+    ⚠ في نسخة llama.cpp master، `llama-server` بيربط على مكتبات مشتركة
+    (`libllama-server-impl.so` + `libggml-cuda.so` …). لو الـ RPATH مالوش
+    `$ORIGIN` (والـ build اتعمل بمجلد مؤقت اتمسح)، الـ binary يفشل بـ:
+        `error while loading shared libraries: libllama-server-impl.so`
+    فبنضيف `LD_LIBRARY_PATH` للمجلد اللي فيه الـ binary + مكتباته.
+    """
+    env = dict(os.environ)
+    lib_dir = str(server.parent)
+    current = env.get("LD_LIBRARY_PATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    if lib_dir not in parts:
+        parts.insert(0, lib_dir)
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
+    return env
+
+
 def _server_help(server: Path) -> str:
     try:
         proc = subprocess.run(
@@ -45,6 +65,7 @@ def _server_help(server: Path) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            env=_server_env(server),
         )
         return (proc.stdout or "") + (proc.stderr or "")
     except Exception:
@@ -66,6 +87,7 @@ def _server_version(server: Path) -> str:
                 capture_output=True,
                 text=True,
                 timeout=45,
+                env=_server_env(server),
             )
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
             if out:
@@ -385,6 +407,68 @@ def _post_chat(port: int, payload: dict, timeout: float) -> dict:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
+# --------------------------------------------------------------------------- الأدوات
+#: نتائج الأدوات الوهمية (للاختبار) — get_stock بيرجع 60 حسب منهج الامتحان.
+TOOL_RESULTS: dict[str, dict] = {
+    "get_stock": {"item_id": "SUT-45", "quantity": 60},
+}
+
+
+def _tool_call_from_message(message: dict) -> dict | None:
+    """بيستخرج استدعاء الأداة من رد llama-server."""
+    calls = message.get("tool_calls") or []
+    if calls and isinstance(calls, list):
+        call = calls[0] or {}
+        fn = call.get("function") or {}
+        name = str(fn.get("name") or call.get("name") or "")
+        raw_args = fn.get("arguments") or call.get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
+                raw_args = {}
+        if name:
+            return {"name": name, "arguments": raw_args if isinstance(raw_args, dict) else {}}
+    # بعض القوالب بتطلع الأداة كنص XML: <tool_call>{...}</tool_call>
+    content = str(message.get("content") or "")
+    match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", content, re.S)
+    if match:
+        try:
+            payload = json.loads(match.group(1))
+        except (json.JSONDecodeError, TypeError):
+            return None
+        name = str(payload.get("name") or "")
+        args = payload.get("arguments") or payload.get("parameters") or {}
+        if name:
+            return {"name": name, "arguments": args if isinstance(args, dict) else {}}
+    return None
+
+
+def _run_tool(name: str, arguments: dict) -> Any:
+    """ينفّذ الأداة (محاكاة محلية) ويرجّع النتيجة."""
+    if name == "get_stock":
+        item = str(arguments.get("item_id") or arguments.get("item") or "SUT-45")
+        template = TOOL_RESULTS.get("get_stock") or {}
+        return {**template, "item_id": item}
+    if name == "create_po":
+        return {
+            "status": "created",
+            "po_id": "PO-SUT-45-001",
+            "item_id": arguments.get("item_id"),
+            "qty": arguments.get("qty"),
+            "vendor": arguments.get("vendor"),
+        }
+    return {"status": "unknown_tool", "name": name}
+
+
+def _tool_message(name: str, arguments: dict, result: Any) -> dict:
+    """رسالة دور المستخدم اللي بترجّع نتيجة الأداة."""
+    return {
+        "role": "user",
+        "content": f"<tool_result>\n{json.dumps({'name': name, 'result': result}, ensure_ascii=False)}\n</tool_result>",
+    }
+
+
 def _build_command(
     server: Path,
     gguf_path: Path,
@@ -400,6 +484,14 @@ def _build_command(
     flash_attn: str = "",
     extra_args: list[str] | None = None,
 ) -> list[str]:
+    """يبني أمر llama-server.
+
+    ⚠ الأعلام المهمة (**-ngl**, **--device**, **--chat-template-file**) بتتحط
+    **دايماً** — مش بس لو ظهرت في `--help`.
+    السبب: في التشغيل السابق على Kaggle، `_server_help()` رجّع help ناقص،
+    فـ `_has_flag` أسقط `--device CUDA0` و`--chat-template-file` ⇒
+    التشغيل على المعالج (`-ngl 0` ⇒ `fit=Unknown`) والقالب ما اتطبّقش أصلاً.
+    """
     cmd = [
         str(server),
         "-m",
@@ -420,11 +512,12 @@ def _build_command(
         cmd.append("--no-webui")
     if _has_flag(help_text, "-np"):
         cmd += ["-np", "1"]
-    if _has_flag(help_text, "--chat-template-file"):
-        cmd += ["--chat-template-file", str(template_path)]
+    # ── القالب: دايماً (هو اللي بيخلّي النموذج يطلع `<tool_call>` صح)
+    cmd += ["--chat-template-file", str(template_path)]
     if _has_flag(help_text, "--chat-template-kwargs"):
         cmd += ["--chat-template-kwargs", '{"enable_thinking": false}']
-    if device and _has_flag(help_text, "--device"):
+    # ── الـ device: دايماً لو اتمرّر (CUDA0 على Kaggle / Vulkan0 محلياً)
+    if device:
         cmd += ["--device", device]
     flash = flash_attn or (kv if kv and kv.lower() != "f16" else "")
     if kv and kv.lower() != "f16":
@@ -446,28 +539,30 @@ def run_exam(
     gguf_path: str | Path,
     server_bin: str | Path,
     template_path: str | Path,
-    system_prompt_path: str | Path,
+    system_prompt: str,
     questions: list[dict],
     settings: dict,
     out_dir: str | Path,
     slug: str | None = None,
-    ctx: int = 4096,
+    ctx: int = 8192,
     threads: int = 4,
     kv: str = "f16",
-    ngl: int = 0,
+    ngl: int = 99,
     port: int | None = None,
     startup_timeout: float = 900.0,
-    request_timeout: float = 900.0,
+    request_timeout: float = 1800.0,
     model_timeout: float = 10800.0,
     limit: int = 0,
     device: str = "",
     flash_attn: str = "",
     extra_args: list[str] | None = None,
+    tools: list[dict] | None = None,
+    repeats: int = 1,
+    repeat_for: list[str] | None = None,
 ) -> dict:
     gguf_path = Path(gguf_path).resolve()
     server_bin = Path(server_bin).resolve()
     template_path = Path(template_path).resolve()
-    system_prompt_path = Path(system_prompt_path).resolve()
     out_root = Path(out_dir).resolve()
     logs_dir = out_root / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -478,22 +573,24 @@ def run_exam(
         (gguf_path, "ملف GGUF"),
         (server_bin, "llama-server"),
         (template_path, "القالب"),
-        (system_prompt_path, "الـ system prompt"),
     ):
         if not path.exists():
             raise FileNotFoundError(f"{label} مش موجود: {path}")
     if not questions:
         raise ValueError("قائمة الأسئلة فاضية.")
 
-    system_prompt = system_prompt_path.read_text(encoding="utf-8")
-    temperature = float(settings.get("temperature", 0.0))
-    top_p = float(settings.get("top_p", 1.0))
-    seed = int(settings.get("seed", 20261106))
-    max_tokens = int(settings.get("max_tokens", 1200))
+    temperature = float(settings.get("temperature", 0.6))
+    top_p = float(settings.get("top_p", 0.95))
+    seed = int(settings.get("seed", 1234))
+    max_tokens = int(settings.get("max_tokens", 4000))
     # معاملات اختيارية (توصيات المطوّر) — بتفضل None في وضع الامتحان القياسي
     top_k = settings.get("top_k")
     min_p = settings.get("min_p")
     repeat_penalty = settings.get("repeat_penalty")
+
+    tool_defs = list(tools or [])
+    repeat_targets = {str(x).upper() for x in (repeat_for or [])}
+    n_repeats = max(1, int(repeats or 1))
 
     help_text = _server_help(server_bin)
     version = _server_version(server_bin)
@@ -551,7 +648,7 @@ def run_exam(
                 cwd=str(server_bin.parent),
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                env=dict(os.environ),
+                env=_server_env(server_bin),
             )
         monitor = _RssMonitor(proc.pid).start()
         startup_wait = max(1.0, min(startup_timeout, model_timeout))
@@ -562,50 +659,70 @@ def run_exam(
         consecutive_errors = 0
         selected = questions[:limit] if limit and limit > 0 else questions
 
-        for index, question in enumerate(selected, 1):
+        # ── خطة التنفيذ: كل سؤال × عدد تمريراته (LG/IF/TL بتتكرر 2)
+        plan: list[dict] = []
+        for question in selected:
+            cat = str(question.get("category") or "").upper()
+            n_passes = n_repeats if cat in repeat_targets else 1
+            for p in range(1, n_passes + 1):
+                plan.append({"question": question, "pass": p, "passes_total": n_passes})
+
+        for index, item in enumerate(plan, 1):
+            question = item["question"]
+            pass_no = item["pass"]
             qid = str(question["id"])
+            key = qid if item["passes_total"] == 1 else f"{qid}__{pass_no}"
             prompt = str(question["prompt"])
+            use_tools = bool(question.get("use_tools")) and bool(tool_defs)
             t0 = time.monotonic()
 
             if fatal_error:
-                answers[qid] = {
+                answers[key] = {
                     "answer": "",
                     "reasoning": "",
                     "finish": "ERROR",
                     "usage": {},
                     "seconds": 0.0,
                     "error": fatal_error,
+                    "tool_calls": [],
+                    "tool_results": {},
                 }
                 continue
             if time.monotonic() > deadline:
                 fatal_error = f"تجاوز وقت الموديل ({int(model_timeout / 60)} دقيقة)"
-                answers[qid] = {
+                answers[key] = {
                     "answer": "",
                     "reasoning": "",
                     "finish": "TIMEOUT",
                     "usage": {},
                     "seconds": 0.0,
                     "error": fatal_error,
+                    "tool_calls": [],
+                    "tool_results": {},
                 }
                 continue
             if proc.poll() is not None:
                 fatal_error = f"llama-server وقف فجأة (code={proc.returncode})"
-                answers[qid] = {
+                answers[key] = {
                     "answer": "",
                     "reasoning": "",
                     "finish": "ERROR",
                     "usage": {},
                     "seconds": 0.0,
                     "error": fatal_error,
+                    "tool_calls": [],
+                    "tool_results": {},
                 }
                 continue
 
+            messages: list[dict] = []
+            if system_prompt.strip():
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
             payload = {
                 "model": "local",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
+                "messages": messages,
                 "temperature": temperature,
                 "top_p": top_p,
                 "seed": seed,
@@ -613,6 +730,9 @@ def run_exam(
                 "stream": False,
                 "chat_template_kwargs": {"enable_thinking": False},
             }
+            if use_tools:
+                payload["tools"] = tool_defs
+                payload["tool_choice"] = "auto"
             if top_k is not None:
                 payload["top_k"] = int(top_k)
             if min_p is not None:
@@ -626,34 +746,62 @@ def run_exam(
             usage: dict = {}
             timings: dict = {}
             error = ""
+            tool_calls: list[dict] = []
+            tool_results: dict[str, Any] = {}
+            text_before_first_call = ""
             # مهلة الطلب ما تتجاوزش الموعد النهائي للموديل — عشان طلب واحد
             # بطيء ما يخرقش حدود الـ workflow (6 ساعات) ولا مهلة الموديل.
             left = deadline - time.monotonic()
             if left <= 1.0:
                 fatal_error = f"تجاوز وقت الموديل ({int(model_timeout / 60)} دقيقة)"
-                answers[qid] = {
+                answers[key] = {
                     "answer": "",
                     "reasoning": "",
                     "finish": "TIMEOUT",
                     "usage": {},
                     "seconds": 0.0,
                     "error": fatal_error,
+                    "tool_calls": [],
+                    "tool_results": {},
                 }
                 continue
             req_timeout = max(1.0, min(request_timeout, left))
             try:
-                resp = _post_chat(use_port, payload, req_timeout)
-                choice = (resp.get("choices") or [{}])[0]
-                message = choice.get("message") or {}
-                text = str(message.get("content") or "")
-                reasoning = str(
-                    message.get("reasoning_content")
-                    or message.get("reasoning")
-                    or ""
-                )
-                finish = str(choice.get("finish_reason") or "")
-                usage = resp.get("usage") or {}
-                timings = resp.get("timings") or {}
+                # ── دورة الأدوات: نطلب، لو رجّع استدعاء ⇒ ننفّذه ونكمّل
+                for _tool_round in range(4):
+                    resp = _post_chat(use_port, payload, req_timeout)
+                    choice = (resp.get("choices") or [{}])[0]
+                    message = choice.get("message") or {}
+                    text = str(message.get("content") or "")
+                    reasoning = str(
+                        message.get("reasoning_content")
+                        or message.get("reasoning")
+                        or ""
+                    )
+                    finish = str(choice.get("finish_reason") or "")
+                    usage = resp.get("usage") or {}
+                    timings = resp.get("timings") or {}
+
+                    call = _tool_call_from_message(message) if use_tools else None
+                    if call is None:
+                        break
+                    if not tool_calls:
+                        text_before_first_call = text
+                    tool_calls.append(call)
+                    result = _run_tool(call["name"], call.get("arguments") or {})
+                    tool_results[call["name"]] = result
+                    payload = {
+                        **payload,
+                        "messages": [
+                            *payload["messages"],
+                            {"role": "assistant", "content": message.get("content") or ""},
+                            _tool_message(call["name"], call.get("arguments") or {}, result),
+                        ],
+                    }
+                    left = deadline - time.monotonic()
+                    if left <= 1.0:
+                        break
+                    req_timeout = max(1.0, min(request_timeout, left))
                 consecutive_errors = 0
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")[:400]
@@ -666,7 +814,7 @@ def run_exam(
                 consecutive_errors += 1
 
             seconds = round(time.monotonic() - t0, 2)
-            answers[qid] = {
+            answers[key] = {
                 "answer": text,
                 "reasoning": reasoning,
                 "finish": finish,
@@ -674,6 +822,9 @@ def run_exam(
                 "timings": timings,
                 "seconds": seconds,
                 "error": error,
+                "tool_calls": tool_calls,
+                "tool_results": tool_results,
+                "text_before_first_call": text_before_first_call,
             }
             tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
             tps = None
@@ -689,6 +840,8 @@ def run_exam(
             requests_meta.append(
                 {
                     "id": qid,
+                    "key": key,
+                    "pass": pass_no,
                     "index": index,
                     "seconds": seconds,
                     "tokens": tokens,
@@ -701,12 +854,13 @@ def run_exam(
                     "predicted_n": timings.get("predicted_n"),
                     "finish": finish,
                     "chars": len(text),
+                    "tools": len(tool_calls),
                     "error": error,
                 }
             )
 
             print(
-                f"[{index:02d}/{len(selected)}] {qid:<3} {finish:<9} "
+                f"[{index:02d}/{len(plan)}] {key:<9} {finish:<9} "
                 f"{seconds:6.1f}s  {len(text):4d} حرف  {error[:80]}",
                 flush=True,
             )
@@ -734,8 +888,10 @@ def run_exam(
         "server_log": str(log_path),
         "llama_version": version,
         "template_sha256": sha256_file(template_path),
-        "system_prompt_sha256": sha256_file(system_prompt_path),
         "system_prompt_chars": len(system_prompt),
+        "system_prompt_sha256": __import__("hashlib").sha256(
+            system_prompt.encode("utf-8")
+        ).hexdigest(),
         "ctx": ctx,
         "threads": threads,
         "kv": kv,
@@ -750,6 +906,9 @@ def run_exam(
         "repeat_penalty": repeat_penalty,
         "seed": seed,
         "max_tokens": max_tokens,
+        "repeats": n_repeats,
+        "repeat_for": sorted(repeat_targets),
+        "tools_enabled": bool(tool_defs),
         "request_timeout": request_timeout,
         "model_timeout": model_timeout,
         "gguf_bytes": gguf_path.stat().st_size,
@@ -779,31 +938,32 @@ def run_exam(
 
 # --------------------------------------------------------------------------- CLI
 def main() -> int:
-    ap = argparse.ArgumentParser(description="تشغيل أسئلة الامتحان على llama-server")
+    ap = argparse.ArgumentParser(description="تشغيل أسئلة الامتحان v3 على llama-server")
     ap.add_argument("--gguf", required=True)
     ap.add_argument("--server", default=".llama/bin/llama-server")
     ap.add_argument("--template", default="templates/qwen35_egyptian_nothink.jinja")
-    ap.add_argument("--system-prompt", default="prompts/owner_system_prompt.txt")
-    ap.add_argument("--exam", default="config/exam.yaml")
+    ap.add_argument("--exam", default="exam/exam_questions_v2.json")
     ap.add_argument("--out", default="out")
     ap.add_argument("--slug", default="")
-    ap.add_argument("--ctx", type=int, default=4096)
+    ap.add_argument("--ctx", type=int, default=8192)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--kv", default="f16")
-    ap.add_argument("--ngl", type=int, default=0)
+    ap.add_argument("--ngl", type=int, default=99, help="عدد الطبقات المرفوعة للـ GPU (99 = كل حاجة)")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--startup-timeout", type=float, default=900)
-    ap.add_argument("--request-timeout", type=float, default=900)
+    ap.add_argument("--request-timeout", type=float, default=1800)
     ap.add_argument("--model-timeout", type=float, default=10800)
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--device", default="", help="device للـ offload (مثال: Vulkan0، CUDA0)")
+    ap.add_argument("--device", default="", help="device للـ offload (مثال: CUDA0 على Kaggle، Vulkan0 محلياً)")
     ap.add_argument("--flash-attn", default="", choices=["", "on", "off", "auto"])
     ap.add_argument("--extra-server-args", default="", help="أعلام llama-server إضافية مفصولة بمسافات")
+    ap.add_argument("--no-tools", action="store_true", help="تعطيل تمرير تعريفات الأدوات")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     exam = load_exam()
     questions = exam["questions"]
+    settings = exam.get("settings") or {}
     extra_args = args.extra_server_args.split() if args.extra_server_args else []
     if args.dry_run:
         work = _build_command(
@@ -821,16 +981,21 @@ def main() -> int:
             extra_args=extra_args,
         )
         print("$ " + " ".join(work))
-        print(f"questions={len(questions)} ctx={args.ctx} temp=0 seed=20261106")
+        print(
+            f"questions={len(questions)} ctx={args.ctx} temp={settings.get('temperature')} "
+            f"seed={settings.get('seed')} max_tokens={settings.get('max_tokens')} "
+            f"repeats={settings.get('repeats')} for={settings.get('repeat_for')} "
+            f"tools={0 if args.no_tools else len(exam.get('tools') or [])}"
+        )
         return 0
 
     result = run_exam(
         gguf_path=args.gguf,
         server_bin=args.server,
         template_path=args.template,
-        system_prompt_path=args.system_prompt,
+        system_prompt=str(exam.get("system_prompt") or ""),
         questions=questions,
-        settings=exam.get("settings") or {},
+        settings=settings,
         out_dir=args.out,
         slug=args.slug or Path(args.gguf).stem,
         ctx=args.ctx,
@@ -845,6 +1010,9 @@ def main() -> int:
         device=args.device,
         flash_attn=args.flash_attn,
         extra_args=extra_args,
+        tools=[] if args.no_tools else list(exam.get("tools") or []),
+        repeats=int(settings.get("repeats") or 1),
+        repeat_for=list(settings.get("repeat_for") or []),
     )
     rt = result["runtime"]
     print(

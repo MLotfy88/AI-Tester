@@ -1,0 +1,137 @@
+# ---------------------------------------------------------------------------
+# مراجع العرض + حدود الحكم — الامتحان v3 (33 سؤال · 8 محاور)
+#
+# ⚠ قاعدة أساسية: المرجع هنا **عرض فقط** (display-only).
+#   · لا يدخل في حساب درجة أي نموذج.
+#   · لا يدخل في الحكم (verdict) ولا في بوابات الحد الأدنى.
+#   · كل رقم مرجعي لازم يكون مكتوب مصدره (benchmark + رابط + تاريخ).
+#   · أي محور مفيش له benchmark عام مطابق ⇒ مفيش رقم مخترع: بنكتب null.
+#
+# الأرقام مرجعية لـ **Gemini 2.5 Pro** مبنية على بنشماركات عامة منشورة
+# (مش مقاسة على أسئلة امتحاننا — وده مكتوب صراحةً في كل محور).
+# ---------------------------------------------------------------------------
+
+verdicts:
+  - min: 85
+    label: "قريب جدًا من Gemini 2.5 Pro في المقاييس دي 🟢"
+  - min: 70
+    label: "قريب مع فجوات 🟡"
+  - min: 55
+    label: "متوسط 🟠"
+  - min: 0
+    label: "أقل من الحد الأخير — بعيد 🔴"
+
+references:
+  gemini:
+    name: "Gemini 2.5 Pro"
+    kind: "display_only"          # ⛔ عرض فقط — لا يدخل في حكم أي نموذج
+    affects_verdict: false
+    source_kind: "public_benchmarks"
+    source_model: "Gemini 2.5 Pro"
+    source_date: "2025-06-27"
+    color: "#c084fc"
+
+    primary_source:
+      title: "Gemini 2.5: Pushing the Frontier with Advanced Reasoning… (Technical Report)"
+      url: "https://storage.googleapis.com/deepmind-media/gemini/gemini_v2_5_report.pdf"
+    secondary_sources:
+      - title: "Gemini 2.5 Pro Model Card"
+        url: "https://storage.googleapis.com/deepmind-media/Model-Cards/Gemini-2-5-Pro-Model-Card.pdf"
+      - title: "evals.report — Gemini 2.5 Pro (50 benchmark result)"
+        url: "https://evals.report/models/google-gemini-2-5-pro"
+      - title: "IFEval Leaderboard (LayerLens / Artificial Analysis)"
+        url: "https://pricepertoken.com/leaderboards/benchmark/ifeval"
+
+    note: >-
+      الأرقام دي **مش مقاسة على أسئلة امتحاننا** — هي بنشماركات عامة منشورة
+      لنفس النموذج، اتحوّلت لتقدير لكل محور على سعة 0..100 بنفس أوزان
+      الامتحان. مرجع للمقارنة فقط، و**مالوش أي تأثير في الحكم**.
+
+    # ── التقدير لكل محور ───────────────────────────────────────────────────
+    # value : التقدير على 0..100 (null = مفيش benchmark عام مطابق)
+    # basis : البينشمارك اللي اتحسب منه + رقمه المنشور
+    # fit   : مدى قرب البينشمارك من معنى المحور (قريب / متوسط / ضعيف)
+    axes:
+      EG:
+        value: 70.7
+        fit: "متوسط"
+        basis:
+          - {name: "Global-MMLU (Lite)", score: 89.2, kind: "official", src: "technical_report"}
+          - {name: "PolyMath (DW-ACC)", score: 52.2, kind: "verified", src: "evals.report"}
+        why: >-
+          مفيش benchmark عام يقيس العامية المصرية تحديدًا؛ ده تقدير من
+          الأداء متعدد اللغات + الاستدلال بلغات متعددة.
+      ST:
+        value: 82.5
+        fit: "متوسط"
+        basis:
+          - {name: "Arena-Hard-Auto v2.0", score: 79.0, kind: "official", src: "evals.report"}
+          - {name: "MMLU-Pro", score: 86.2, kind: "verified", src: "evals.report"}
+          - {name: "Aider Polyglot", score: 82.2, kind: "official", src: "technical_report"}
+        why: >-
+          تقريبي: جودة الردود المفتوحة (حَكَم LLM) + دقة المعرفة +
+          الانضباط في المخرجات المُنظَّمة.
+      LG:
+        value: 82.9
+        fit: "قريب"
+        basis:
+          - {name: "GPQA (diamond)", score: 86.4, kind: "official", src: "technical_report"}
+          - {name: "AIME 2025", score: 88.0, kind: "official", src: "technical_report"}
+          - {name: "LiveCodeBench", score: 74.2, kind: "official", src: "technical_report"}
+        why: >-
+          أقرب محور للقياس: أسئلة LG في الامتحان = تفكير خوارزمي + رياضيات +
+          إصلاح كود ⇒ نفس بنشماركات المنطق/الرياضيات/البرمجة.
+      HN:
+        value: 73.5
+        fit: "متوسط"
+        basis:
+          - {name: "SimpleQA", score: 54.0, kind: "official", src: "technical_report"}
+          - {name: "Vectara Hallucination (7.0% ← 93.0% عدم تأليف)", score: 93.0, kind: "official", src: "evals.report"}
+        why: >-
+          SimpleQA بتكافئ الإجابة الص دقيقة وبتعاقب المؤلَّفة ⇒ أقرب رقم عام
+          لـ«منع التأليف» في محور الصدق.
+      IF:
+        value: 71.6
+        fit: "قريب"
+        basis:
+          - {name: "IFEval", score: 90.8, kind: "verified", src: "LayerLens / Artificial Analysis"}
+          - {name: "IFBench", score: 52.3, kind: "official", src: "evals.report"}
+        why: >-
+          IFEval و IFBench بيقيسوا بالظبط «اتّباع التعليمات بصيغة صارمة»
+          (عدد جمل / JSON فقط / عدد نقاط) = نفس طبيعة أسئلة IF.
+      DC:
+        value: 82.2
+        fit: "ضعيف"
+        basis:
+          - {name: "Aider Polyglot", score: 82.2, kind: "official", src: "technical_report"}
+        why: >-
+          مفيش benchmark عام مباشر لـ«توثيق وتقسيم مهام»؛ دي أقرب بديل
+          (تحرير منظَّم متعدد الملفات) ⇒ الرقم تقريبي وضعيف المطابقة.
+      BR:
+        value: 79.0
+        fit: "ضعيف"
+        basis:
+          - {name: "Arena-Hard-Auto v2.0", score: 79.0, kind: "official", src: "evals.report"}
+        why: >-
+          أسئلة Arena المفتوحة بتتقييم الإبداع والنقد ⇒ بديل تقريبي،
+          ومفيش قياس مباشر للعصف الذهني.
+      TL:
+        value: 57.2
+        fit: "متوسط"
+        basis:
+          - {name: "SWE-bench Verified (single attempt)", score: 59.6, kind: "official", src: "technical_report"}
+          - {name: "WebArena", score: 54.8, kind: "verified", src: "evals.report"}
+        why: >-
+          أسئلة الأدوات عندنا سهلة نسبيًا (استدعاء وظيفتين)، فمقياس
+          الـagent الحقيقي بيقلّل التقدير. مؤشرات إضافية أدناه.
+
+    # ── مؤشرات إضافية (Elo / نسب مقلوبة) — عرض فقط ─────────────────────────
+    extra_indicators:
+      - {name: "LMArena (Chat Preference)", value: 1457, unit: "Elo", src: "evals.report"}
+      - {name: "EQ-Bench Creative Writing v3", value: 1417, unit: "Elo", src: "evals.report"}
+      - {name: "GDPval (Agentic Professional Work)", value: 919, unit: "Elo", src: "evals.report"}
+      - {name: "WebDev Arena", value: 1204, unit: "Elo", src: "evals.report"}
+      - {name: "Humanity's Last Exam (no tools)", value: 21.6, unit: "%", src: "technical_report"}
+      - {name: "MCP-Universe", value: 22.08, unit: "%", src: "evals.report"}
+      - {name: "MCP Atlas", value: 8.8, unit: "%", src: "evals.report"}
+      - {name: "GAIA", value: 33.3, unit: "%", src: "evals.report"}

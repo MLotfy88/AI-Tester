@@ -1,13 +1,13 @@
 """يبني مجلد الـ Kaggle kernel من مشروع الامتحان (بدون أي رفع).
 
 اللي بيحصل:
-  1. المشروع (scripts/config/prompts/templates) بيتضغط zip ويتحوّل base64.
+  1. المشروع (scripts/config/exam/templates) بيتضغط zip ويتحوّل base64.
   2. القيم بتتحقن في قالب `kaggle/kernel_main.py` (المكان placeholder).
   3. القالب بيتقسّم لخلايا notebook بشكل `# %%` ويتكتب `exam-runner.ipynb`.
   4. بيتكتب `kernel-metadata.json` (GPU + Internet + private).
 
 الاستخدام:
-    python kaggle/build_kernel.py --models Qwen/Qwen3-4B-GGUF --owner myuser
+    python kaggle/build_kernel.py --models owner/Some-Model-GGUF --owner myuser
 """
 from __future__ import annotations
 
@@ -21,7 +21,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = Path(__file__).resolve().parent / "kernel_main.py"
-INCLUDE = ("scripts", "config", "prompts", "templates")
+# ⚠ `exam/` لازم يكون في القائمة — ملف `exam/exam_questions_v2.json` هو
+#   **المصدر الوحيد للحقيقة** للامتحان v3. من غيره `run_exam.py` يفشل
+#   بـ SpecError (الملف مش موجود) والـ kernel كله يطلّع فاشل.
+INCLUDE = ("scripts", "config", "exam", "templates")
 
 # ملاحظة: أسماء الـ accelerator بتتغير من نسخة للتانية في Kaggle CLI.
 # بنكتبها في الميتاداتا + بنتحقق جوه الـ notebook إن الكارت هو المتوقع (Cell 2).
@@ -96,13 +99,12 @@ def build(
     kernel_name: str,
     models: str,
     quant: str = "Q4_K_M",
-    ctx: int = 4096,
-    policy: str = "paper",
+    ctx: int = 8192,
     accelerator: str = "t4x2",
     vram_gib: float = 3.4,
     ram_gib: float = 15.9,
     threads: int = 8,
-    llama_tag: str = "latest",
+    llama_tag: str = "master",
     kv: str = "f16",
     template_mode: str = "auto",
     max_gib: float = 20.0,
@@ -120,7 +122,6 @@ def build(
         "models": models,
         "quant": quant,
         "ctx": ctx,
-        "policy": policy,
         "vram_gib": vram_gib,
         "ram_gib": ram_gib,
         "threads": threads,
@@ -208,13 +209,12 @@ def main() -> int:
     ap.add_argument("--owner", default="", help="اسم حساب Kaggle (لازم للـ id)")
     ap.add_argument("--kernel-name", default="", help="اسم الـ kernel (افتراضي: exam-<تاريخ>)")
     ap.add_argument("--quant", default="Q4_K_M")
-    ap.add_argument("--ctx", type=int, default=4096)
-    ap.add_argument("--policy", default="paper", choices=["paper", "baseline"])
+    ap.add_argument("--ctx", type=int, default=8192, help="لازم 8192 — ورقة الامتحان ثابتة")
     ap.add_argument("--accelerator", default="t4x2", choices=sorted(ACCELERATORS))
     ap.add_argument("--vram-gib", type=float, default=3.4)
     ap.add_argument("--ram-gib", type=float, default=15.9)
     ap.add_argument("--threads", type=int, default=8)
-    ap.add_argument("--llama-tag", default="latest")
+    ap.add_argument("--llama-tag", default="master", help="master = أحدث llama.cpp (يدعم qwen35)")
     ap.add_argument("--kv", default="f16")
     ap.add_argument("--template-mode", default="auto", choices=["auto", "exam", "model"])
     ap.add_argument("--max-gib", type=float, default=20.0)
@@ -231,7 +231,6 @@ def main() -> int:
         models=args.models,
         quant=args.quant,
         ctx=args.ctx,
-        policy=args.policy,
         accelerator=args.accelerator,
         vram_gib=args.vram_gib,
         ram_gib=args.ram_gib,

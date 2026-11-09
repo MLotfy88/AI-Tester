@@ -17,9 +17,9 @@ on:
         default: "Q4_K_M"
         type: string
       ctx_size:
-        description: "حجم السياق — لازم 4096 لأن ورقة الامتحان ثابتة"
+        description: "حجم السياق — لازم 8192 لأن ورقة الامتحان ثابتة"
         required: true
-        default: "4096"
+        default: "8192"
         type: string
       accelerator:
         description: "الكارت على Kaggle — T4×2 (كارت واحد فعلياً)"
@@ -27,12 +27,6 @@ on:
         type: choice
         options: [t4x2]
         default: t4x2
-      policy:
-        description: "سياسة التصحيح (paper = ورقة الامتحان الصارمة)"
-        required: false
-        type: choice
-        options: [paper, baseline]
-        default: paper
       vram_budget_gib:
         description: "ميزانية VRAM المحاكاة (جهازك = 3.4)"
         required: false
@@ -102,7 +96,6 @@ jobs:
             --owner "${{ secrets.KAGGLE_USERNAME }}" \
             --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
-            --policy "${{ inputs.policy }}" \
             --vram-gib "${{ inputs.vram_budget_gib }}" \
             --ram-gib "${{ inputs.ram_budget_gib }}" \
             --threads "${{ inputs.threads }}" \
@@ -120,7 +113,6 @@ jobs:
             --owner "${{ secrets.KAGGLE_USERNAME }}" \
             --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
-            --policy "${{ inputs.policy }}" \
             --vram-gib "${{ inputs.vram_budget_gib }}" \
             --ram-gib "${{ inputs.ram_budget_gib }}" \
             --threads "${{ inputs.threads }}" \
@@ -130,7 +122,19 @@ jobs:
       - name: Job summary
         if: always()
         run: |
-          cat out_kaggle/*/summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          # ⚠ `kaggle kernels output` ممكن يحط الملفات في مجلد متداخل
+          #   (out_kaggle/<slug>/<slug>/summary.md) ⇒ بندوّر عليها بـ find
+          #   بدل glob ثابت.
+          set -o pipefail
+          SUMMARY_FILE="$(find out_kaggle -type f -name 'summary.md' 2>/dev/null | head -n 1 || true)"
+          if [ -n "$SUMMARY_FILE" ]; then
+            echo "📄 summary.md: $SUMMARY_FILE"
+            cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠ مفيش summary.md في out_kaggle — راجع لوج الخطوات فوق."
+            echo "### ⚠ مفيش summary.md — التشغيل ماوصلش لآخره أو فشل قبل توليد التقرير." >> "$GITHUB_STEP_SUMMARY"
+            find out_kaggle -maxdepth 3 -type f 2>/dev/null | head -n 40 | sed 's/^/  /' >> "$GITHUB_STEP_SUMMARY" || true
+          fi
 
       - name: Upload report artifacts
         if: always()

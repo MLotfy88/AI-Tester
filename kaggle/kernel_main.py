@@ -7,9 +7,14 @@
 # 2. يبني llama.cpp بـ CUDA (أو ينزّل release جاهز).
 # 3. **يحجز ballast رام وVRAM** (بعد البناء، قبل التحميل) علشان يبقي المتاح زي جهازك المستهدف بالظبط.
 # 4. ينزّل موديلات GGUF من Hugging Face (نماذج **عامة فقط** — Kaggle Secrets بتتشال مع CLI push).
-# 5. يشغّل نفس الـ 21 سؤال بنفس الإعدادات ويكتب Excel + HTML + summary.md في Output.
+# 5. يشغّل امتحان v3 (33 سؤال مصحّح + 14 استكشافي) بنفس الإعدادات
+#    ويكتب Excel + HTML + summary.md في Output (نسخة نتايج واحدة بعد التنظيف).
 #
-# ⚠ لم يُختبر على Kaggle من قبلنا بعد — لو حصل خطأ، اقرأ رسالته وعدّل ثم أعد التشغيل.
+# ⚠ آخر تشغيل حقيقي (قبل v3) كشف 3 مشاكل اتصلّحت هنا:
+#   · `gguf` مش متثبّت ⇒ fit=Unknown ⇒ `-ngl 0` ⇒ تشغيل كامل على المعالج (5.6 tok/s).
+#   · `llama-server` مكسور (مكتبات مش لاقية) + `--version` رجع exit 0 ⇒ كمّل على المعالج.
+#   · `exam/` (ملف المواصفات) كان ناقص من الـ zip ⇒ SpecError.
+#   لو حصل خطأ جديد، اقرأ رسالته بالتفصيل وأعد التشغيل.
 
 # %% [markdown]
 # ## Cell 1: المعاملات + فك ضغط المشروع
@@ -84,7 +89,34 @@ print(f"✅ GPU: {gpu_name} · compute {gpu_cap} · CUDA arch={cuda_arch or 'aut
 # ## Cell 3: تثبيت المتطلبات + بناء llama.cpp بـ CUDA
 
 # %%
-subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pyyaml", "openpyxl"], check=False)
+# ⚠ `gguf` لازم يتثبّت: `fit_check` بيقرا ميتاداتا الـ GGUF بيه.
+#    من غيره ⇒ `fit_class=Unknown` ⇒ `ngl` بيتحسب 0 ⇒ التشغيل كله على المعالج
+#    (ده اللي حصل في التشغيل الأول: -ngl 0 و 5.6 tok/s و 54 دقيقة).
+subprocess.run(
+    [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "pyyaml",
+        "openpyxl",
+        "gguf>=0.10.0",
+        "huggingface_hub>=0.24.0",
+        "psutil>=5.9.0",
+    ],
+    check=False,
+)
+
+# تأكيد التثبيت (فشل صامت هنا = -ngl 0 تاني)
+import importlib  # noqa: E402
+
+for _mod in ("yaml", "openpyxl", "gguf", "huggingface_hub", "psutil"):
+    try:
+        importlib.import_module(_mod)
+        print(f"✅ {_mod} متثبّت")
+    except Exception as _exc:  # noqa: BLE001
+        raise SystemExit(f"❌ مكتبة {_mod} مش متثبّتة: {_exc}") from _exc
 
 llama_dir = WORK / "llama"
 install_cmd = [
@@ -206,12 +238,17 @@ exam_cmd = [
     str(PARAMS["models"]),
     "--quant",
     str(PARAMS.get("quant") or "Q4_K_M"),
+    # ctx ثابت 8192 (ورقة الامتحان) — أي قيمة تانية مرفوضة من run_exam.py
     "--ctx",
-    str(PARAMS.get("ctx") or 4096),
+    str(PARAMS.get("ctx") or 8192),
     "--kv",
     str(PARAMS.get("kv") or "f16"),
     "--threads",
     str(actual_threads),
+    # ⚠ device بيمرَّر **دائماً**: من غيره التشغيل كله على المعالج (CPU).
+    #   أما ngl فبييجي من حساب الـ fit (ميزانية VRAM بعد الـ ballast) —
+    #   وrun_exam.py عنده حارس: لو الـ fit فشل ⇒ ngl=99 مع تحذير صريح،
+    #   مش 0 صامت زي التشغيل الأول.
     "--device",
     "CUDA0",
     "--runner-kind",
@@ -226,8 +263,6 @@ exam_cmd = [
     str(server_bin),
     "--out",
     str(OUT),
-    "--policy",
-    str(PARAMS.get("policy") or "paper"),
     "--max-gib",
     str(PARAMS.get("max_gib") or 20),
     "--model-timeout",
@@ -252,11 +287,21 @@ print(f"exit={proc.returncode} · المدة {(time.time() - started) / 60:.1f} 
 # ## Cell 6: تجميع المخرجات (Excel + HTML + logs) في Output
 
 # %%
-dest = WORK / "exam-out-final"
-if dest.exists():
-    shutil.rmtree(dest, ignore_errors=True)
-shutil.copytree(OUT, dest, dirs_exist_ok=True)
-(dest / "kaggle-gpu.txt").write_text(
+# ⚠ تنظيف الـ Output: Kaggle بيرفع **كل** اللي في /kaggle/working.
+#   فبنمسح: مصدر المشروع (exam/) · بناء llama.cpp (llama/) · __pycache__
+#   ونسيب **نسخة نتايج واحدة** بس (exam-out) — مش اتنين.
+RESULTS = WORK / "exam-out"
+
+# 1) اجمع كل حاجة مهمة في مجلد واحد قبل التنظيف
+if not RESULTS.exists():
+    RESULTS.mkdir(parents=True, exist_ok=True)
+for name in ("device_profile.yaml",):
+    src = WORK / name
+    if src.exists() and not (RESULTS / name).exists():
+        shutil.copy2(src, RESULTS / name)
+
+# 2) سجّل معلومات الكارت **داخل** مجلد النتايج
+(RESULTS / "kaggle-gpu.txt").write_text(
     f"gpu={gpu_name}\ncompute_cap={gpu_cap}\ncuda_arch={cuda_arch}\n"
     f"vram_target_gib={target_vram_gib}\nram_target_gib={target_ram_gib}\n"
     f"actual_cpu_threads={actual_threads}\n"
@@ -267,12 +312,30 @@ shutil.copytree(OUT, dest, dirs_exist_ok=True)
     encoding="utf-8",
 )
 
+# 3) امسح كل حاجة مش مطلوبة من /kaggle/working
+for junk in (EXAM, WORK / "llama", WORK / "llama-release.zip", WORK / "release_extract"):
+    if not junk.exists():
+        continue
+    if junk.is_dir():
+        shutil.rmtree(junk, ignore_errors=True)
+    else:
+        junk.unlink(missing_ok=True)
+for cache in list(WORK.rglob("__pycache__")):
+    shutil.rmtree(cache, ignore_errors=True)
+for pyc in list(WORK.rglob("*.pyc")):
+    pyc.unlink(missing_ok=True)
+
+# 4) مجلد نتايج واحد بس — شيل أي نسخة تانية
+for dup in (WORK / "exam-out-final", WORK / "exam-out-copy"):
+    if dup.exists():
+        shutil.rmtree(dup, ignore_errors=True)
+
 print("\n### الملفات في Output:")
 for path in sorted(WORK.rglob("*")):
     if path.is_file():
         print(f"  {path} ({path.stat().st_size / 1024:.1f} KiB)")
 
-summary = dest / "summary.md"
+summary = RESULTS / "summary.md"
 if summary.exists():
     print("\n===== summary.md =====\n")
     print(summary.read_text(encoding="utf-8")[:12000])
