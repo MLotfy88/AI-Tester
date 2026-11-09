@@ -139,6 +139,7 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
         "الموديل",
         "الحالة",
         "الدرجة /100",
+        "الاستكشافي /20 (ميزة إضافية)",
         "الحكم",
         "محاور تحت الحد الأدنى",
     ]
@@ -173,11 +174,20 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
             str(_cat_cfg(exam_cfg, k).get("name") or k) for k in failed
         ) or "سليمة"
         gap = gemini_gap(exam, exam_cfg) if ref else {"distance": None}
+        prof = exam.get("profile") or {}
+        prof_answered = int(prof.get("answered") or 0)
+        prof_cell = (
+            f"{fmt_num(prof.get('total'), 1)}/20 ({fmt_num(prof.get('percent'), 0)}%)"
+            f" · {prof_answered}/{int(prof.get('count') or 0)}"
+            if prof_answered
+            else "—"
+        )
         row: list[Any] = [
             i,
             result.get("model") or "",
             _status(result),
             total if total is not None else "—",
+            prof_cell,
             exam.get("verdict") or (result.get("error") or "لم يُشغّل"),
             failed_names,
         ]
@@ -252,13 +262,13 @@ def _summary_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
     for row in ws.iter_rows(min_row=2, max_row=main_rows):
         verdict_cell = row[4]
         text = str(verdict_cell.value or "")
-        if "فشل حرج" in text:
+        if "ضعيف" in text:
             verdict_cell.fill = BAD_FILL
             verdict_cell.font = Font(bold=True, color="991B1B")
-        elif "قريب جدًا" in text:
-            verdict_cell.fill = OK_FILL
-        elif "قريب مع فجوات" in text:
+        elif "مقبول" in text:
             verdict_cell.fill = WARN_FILL
+        elif "جيد" in text:
+            verdict_cell.fill = OK_FILL
         if row[2].value == "فشل":
             row[2].fill = BAD_FILL
     ws.row_dimensions[1].height = 34
@@ -416,6 +426,64 @@ def _questions_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None
         widths={1: 34, 2: 8, 3: 8, 4: 28, 5: 9, 6: 7, 7: 8, 8: 10, 9: 9, 10: 10, 11: 9, 12: 10, 13: 28, 14: 60, 15: 70},
     )
     _add_color_scale(ws, 7)
+    ws.row_dimensions[1].height = 30
+
+
+def _profile_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict) -> None:
+    """الأسئلة الاستكشافية — ميزة إضافية (0..20) لا تؤثر على المجموع الأساسي."""
+    headers = [
+        "الموديل",
+        "السؤال",
+        "المجال",
+        "الدرجة",
+        "الحد",
+        "%",
+        "التغطية",
+        "المباشرة",
+        "التنظيم",
+        "العمق",
+        "النقاط المتوقعة",
+        "ملاحظات المعايير",
+        "الإجابة (مقتطف)",
+    ]
+    ws.append(headers)
+    _style_header(ws)
+    for result in results:
+        exam = result.get("exam")
+        if not exam:
+            continue
+        prof = exam.get("profile") or {}
+        model = result.get("model") or ""
+        for pid, row in (prof.get("questions") or {}).items():
+            crits = row.get("criteria") or []
+            points = [c.get("points") for c in crits]
+            notes = "؛ ".join(str(c.get("note") or "") for c in crits)
+            answer = (row.get("answer") or "").replace("\r", " ").replace("\n", " ")
+            ws.append(
+                [
+                    model,
+                    pid,
+                    row.get("domain") or "",
+                    row.get("score"),
+                    row.get("max"),
+                    _pct(row.get("score"), row.get("max")),
+                    points[0] if len(points) > 0 else "—",
+                    points[1] if len(points) > 1 else "—",
+                    points[2] if len(points) > 2 else "—",
+                    points[3] if len(points) > 3 else "—",
+                    (row.get("expected") or "")[:300],
+                    notes[:600],
+                    answer[:220],
+                ]
+            )
+    _style_body(
+        ws,
+        widths={
+            1: 34, 2: 8, 3: 26, 4: 9, 5: 7, 6: 8, 7: 9, 8: 9, 9: 9,
+            10: 9, 11: 46, 12: 60, 13: 70,
+        },
+    )
+    _add_color_scale(ws, 6)
     ws.row_dimensions[1].height = 30
 
 
@@ -860,7 +928,11 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
         ("إصدار الامتحان", exam_cfg.get("version", "—"), "v3 — 33 سؤال · 8 محاور"),
         ("ملف المواصفات", exam_cfg.get("spec_path", "—"), "المصدر الوحيد للحقيقة"),
         ("عدد الأسئلة المصحّحة", len(exam_cfg.get("questions") or []), "5 معايير × درجتين"),
-        ("عدد الأسئلة الاستكشافية", len(exam_cfg.get("profile") or []), "بلا درجة"),
+        (
+            "عدد الأسئلة الاستكشافية",
+            len(exam_cfg.get("profile") or []),
+            "ميزة إضافية — تقييم من 20 (لا يؤثر على المجموع الأساسي ولا على الحكم)",
+        ),
         ("عدد المحاور", len(categories), ""),
         ("درجة المعيار", exam_cfg.get("rubric_points", 2), "2 × 5 = 10 درجات/سؤال"),
         ("temperature", settings.get("temperature"), "ثابت"),
@@ -869,7 +941,11 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
         ("ctx_size", settings.get("ctx_size"), "ثابت — أي قيمة تانية تلغي المقارنة"),
         ("max_tokens", settings.get("max_tokens"), "ثابت"),
         ("max_answer_chars", settings.get("max_answer_chars"), ""),
-        ("تكرار الأسئلة", settings.get("repeats"), "المحاور: " + "، ".join(settings.get("repeat_for") or [])),
+        (
+            "تكرار الأسئلة",
+            settings.get("repeats"),
+            "تمريرة واحدة لكل سؤال (درجة واحدة + ملاحظة واحدة)",
+        ),
         ("system prompt", run_meta.get("system_prompt", "—"), "من ملف المواصفات (system_prompt_style)"),
         ("قالب المحادثة", run_meta.get("template", "—"), ""),
         ("طريقة التشغيل", run_meta.get("mode", "llama-server /v1/chat/completions"), ""),
@@ -936,6 +1012,8 @@ def build_workbook(results: list[dict], exam_cfg: dict, run_meta: dict | None = 
     _gates_sheet(ws, results)
     ws = wb.create_sheet("Questions")
     _questions_sheet(ws, results, exam_cfg)
+    ws = wb.create_sheet("Profile")
+    _profile_sheet(ws, results, exam_cfg)
     ws = wb.create_sheet("Rubric")
     _rubric_sheet(ws, results, exam_cfg)
     ws = wb.create_sheet("Fit")

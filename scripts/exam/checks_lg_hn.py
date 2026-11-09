@@ -14,6 +14,7 @@ from .rubric_lib import (
     contains_any,
     contains_groups,
     count_any,
+    duplicate_lines,
     fail,
     has_int,
     has_number_near,
@@ -22,6 +23,7 @@ from .rubric_lib import (
     ok,
     partial,
     repetition_ratio,
+    repetition_score,
     word_count,
 )
 
@@ -42,6 +44,18 @@ HEDGE_WORDS = (
     "التقدير",
     "تقريبا",
     "تقريبًا",
+    # ── تراجع/اعتذار (كان بيفوت ⇒ إجابة «حاسمة» وفيها 3 اعتذارات)
+    "أعتذر",
+    "اعتذر",
+    "عذرًا",
+    "عذرا",
+    "آسف",
+    "أسف",
+    "خطأ في الإجابة السابقة",
+    "الخطأ السابق",
+    "أكون غلط",
+    "صحح",
+    "تصحيح",
 )
 
 #: أرقام عربية-هندية شائعة في الحسابات
@@ -303,14 +317,23 @@ def _lg3_pseudocode(text: str) -> tuple[float, str]:
         re.findall(r"(?m)^\s*(?:[-*•]|\d{1,2}[\.\)]|الخطوة\s*\d)\s*\S", text)
     )
     if blocks and has_pseudo_kw:
-        return 2.0, "pseudocode في بلوك كود مع تسمية"
-    if blocks:
-        return 2.0, "pseudocode في بلوك كود"
-    if n_steps >= 3:
-        return 2.0, f"pseudocode مرقّم ({n_steps} خطوات) ✓"
-    if n_steps >= 2 or has_pseudo_kw:
-        return 1.0, f"خطوات مرقمة ({n_steps}) بدون بلوك كود"
-    return 0.0, "مفيش pseudocode"
+        points, note = 2.0, "pseudocode في بلوك كود مع تسمية"
+    elif blocks:
+        points, note = 2.0, "pseudocode في بلوك كود"
+    elif n_steps >= 3:
+        points, note = 2.0, f"pseudocode مرقّم ({n_steps} خطوات) ✓"
+    elif n_steps >= 2 or has_pseudo_kw:
+        points, note = 1.0, f"خطوات مرقمة ({n_steps}) بدون بلوك كود"
+    else:
+        points, note = 0.0, "مفيش pseudocode"
+    # ── «منظم» يعني من غير تكرار ولا حشو: رد 6 آلاف حرف فيه 200 سطر
+    #   مكرر was بياخد 2/2 «منظم» ⇒ الخصم هنا.
+    dup = duplicate_lines(text)
+    rep = repetition_score(text)
+    bloated = word_count(text) > 700
+    if points > 0 and (dup >= 3 or rep >= 0.5 or bloated):
+        return 1.0, f"{note} · فيه تكرار/حشو ({dup} سطر مكرر · نسبة {rep})"
+    return points, note
 
 
 def _lg3_complexity(text: str) -> tuple[float, str]:

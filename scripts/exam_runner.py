@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from common import human_bytes, load_exam, now_iso, sha256_file, slugify, tail_text, write_text
+from exam.spec import all_questions
 
 # نفس الـ logger اللي بيستخدمه run_exam.py ("exam") ⇒ التحذيرات بتوصل لـ run.log والطرفية.
 log = logging.getLogger("exam")
@@ -962,7 +963,8 @@ def main() -> int:
     args = ap.parse_args()
 
     exam = load_exam()
-    questions = exam["questions"]
+    # الـ33 المصحّحة + الـ14 الاستكشافية (ميزة إضافية — مش بتدخل في المجموع)
+    questions = all_questions(exam)
     settings = exam.get("settings") or {}
     extra_args = args.extra_server_args.split() if args.extra_server_args else []
     if args.dry_run:

@@ -15,6 +15,8 @@ from .rubric_lib import (
     dialect_per_1k,
     duplicate_lines,
     english_count,
+    repeated_clause_count,
+    repetition_score,
     fail,
     header_count,
     has_table,
@@ -235,7 +237,9 @@ def _eg2_example(text: str) -> tuple[float, str]:
 
 def _eg2_terms(text: str) -> tuple[float, str]:
     n = english_count(text)
-    if 1 <= n <= 18:
+    if n == 0:
+        return 0.0, "مفيش أي مصطلحات إنجليزية"
+    if n <= 18:
         return 2.0, f"مصطلحات إنجليزية معقولة ({n} كلمة)"
     if n <= 30:
         return 1.0, f"إنجليزي كتير شوية ({n} كلمة)"
@@ -350,7 +354,7 @@ def _eg4_smart(text: str) -> tuple[float, str]:
     if insight and w >= 12:
         return 2.0, "فيه ملاحظة ذكية ✓"
     if w >= 12:
-        return 1.0, "فيه محتوى بس مفيش استنتاج واضح"
+        return 0.0, "كلام عام من غير استنتاج ذكي"
     return 0.0, "رد ضحك بدون ملاحظة"
 
 
@@ -455,8 +459,11 @@ def _eg6_little_english(text: str) -> tuple[float, str]:
 
 
 def _eg6_no_repeat(text: str) -> tuple[float, str]:
-    rep = repetition_ratio(text)
+    rep = repetition_score(text)
     dup = duplicate_lines(text)
+    clause = repeated_clause_count(text)
+    if clause >= 2:
+        return 0.0, f"تكرار واضح (جملة مكررة {clause} مرات · نسبة {rep})"
     if rep < 0.25 and dup == 0:
         return 2.0, "مفيش تكرار"
     if rep < 0.45 and dup <= 1:
@@ -645,7 +652,7 @@ def _st3_medical(text: str) -> tuple[float, str]:
 
 def _st3_precise(text: str) -> tuple[float, str]:
     w = word_count(text)
-    if w <= 220 and repetition_ratio(text) < 0.35:
+    if w <= 220 and repetition_score(text) < 0.35:
         return 2.0, f"مختصر بدون حشو ({w} كلمة)"
     if w <= 320:
         return 1.0, f"طول متوسط ({w} كلمة)"
@@ -680,7 +687,7 @@ def _st4_example(text: str) -> tuple[float, str]:
     if contains_any(text, ("مثال", "مثلا", "بفرض", "لو اشترينا", "لو الكمية")) and numbers_in(text):
         return 2.0, "فيه مقارنة رقمية"
     if numbers_in(text):
-        return 1.0, "أرقام بدون مثال واضح"
+        return 0.0, "أرقام بس من غير مقارنة حسابية"
     return 0.0, "مفيش مثال حسابي"
 
 

@@ -29,6 +29,7 @@ from common import (  # noqa: E402
     slugify,
 )
 from exam.grader import grade_exam  # noqa: E402
+from exam.spec import all_questions  # noqa: E402
 from exam_runner import run_exam  # noqa: E402
 from excel_report import write_workbook  # noqa: E402
 from fit_check import analyze as analyze_fit  # noqa: E402
@@ -111,8 +112,10 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         f"- **البداية:** {run_meta.get('started_at', '—')}",
         f"- **النهاية:** {run_meta.get('finished_at', '—')}",
         f"- **عدد الموديلات:** {len(results)}",
-        f"- **الامتحان:** {len(exam_cfg.get('questions') or [])} سؤال مصحّح · "
-        f"{len(exam_cfg.get('profile') or [])} سؤال استكشافي · "
+        f"- **الامتحان:** {len(exam_cfg.get('questions') or [])} سؤال مصحّح "
+        f"(أساسي · من 100) · "
+        f"{len(exam_cfg.get('profile') or [])} سؤال استكشافي "
+        f"(ميزة إضافية · من 20 — مش بتأثر على الحكم) · "
         f"{len(cat_keys)} محاور (5 معايير × درجتين لكل سؤال)",
         f"- **الإعدادات:** temp={settings.get('temperature')} · top_p={settings.get('top_p')} · "
         f"seed={settings.get('seed')} · ctx={settings.get('ctx_size')} · "
@@ -628,7 +631,7 @@ def main() -> int:
                 server_bin=server_path,
                 template_path=eff_template,
                 system_prompt=str(exam_cfg.get("system_prompt") or ""),
-                questions=exam_cfg["questions"],
+                questions=all_questions(exam_cfg),
                 settings=run_settings,
                 out_dir=out_dir,
                 slug=slugify(model.replace("/", "__")),

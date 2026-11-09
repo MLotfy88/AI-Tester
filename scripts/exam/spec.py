@@ -3,11 +3,13 @@
 المنهجية الجديدة (بديل كاملة عن ورقة v2 القديمة):
   · 33 سؤال **مصحّح** (سابقاً 21) · 8 محاور بأوزان · 14 سؤال استكشاف بلا درجة.
   · كل سؤال = **5 معايير rubric × درجتين** ⇒ 10 درجات كحد أقصى للسؤال.
-  · لكل محور **حد أدنى (%)** — النزول تحته = **فشل حرج** حتى لو المجموع عالي.
-  · حدود الحكم: 85 / 70 / 55.
-  · أسئلة LG و IF و TL بتتكرر وبيتاخد متوسطها.
+  · لكل محور **حد أدنى (%)** — النزول تحته = **ضعيف** (المستوى الأدنى).
+  · مستويات الحكم الخمسة بتتحدَّد من **المجموع النهائي** فقط
+    (كل 20% مستوى): ممتاز ≥80 · جيد جدًا ≥60 · جيد ≥40 · مقبول ≥20 · ضعيف <20.
+    المرجع (Gemini) **عرض فقط** وما بيشاركش في التقييم.
+  · كل سؤال بتمريرة **واحدة**: درجة واحدة + ملاحظة واحدة مطابقة ليها.
 
-الملف ده **هو المصدر الوحيد للحقيقة**: `common.load_exam()` بيرجّع形状
+الملف ده **هو المصدر الوحيد للحقيقة**: `common.load_exam()` بيرجّع شكلًا
 موحّد مبني من الـ JSON، فكل Scripts بتقرأ نفس المواصفات بالظبط.
 
 مفيش أي أرقام مخترعة: أي مرجع لازم يكون مكتوب مصدره في `config/references.yaml`.
@@ -18,6 +20,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .checks_profile import PROFILE_MAX, PROFILE_RUBRIC
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SPEC_PATH = ROOT / "exam" / "exam_questions_v2.json"
 REFERENCES_PATH = ROOT / "config" / "references.yaml"
@@ -25,12 +29,15 @@ REFERENCES_PATH = ROOT / "config" / "references.yaml"
 #: درجة المعيار الواحد في الـ rubric (5 معايير × 2 = 10 درجات للسؤال)
 RUBRIC_POINTS = 2.0
 
-#: حدود الحكم المقترحة في ورقة «الملخص» (قابلة للتعديل من config/references.yaml)
+#: مستويات الحكم الخمسة (قابلة للتعديل من config/references.yaml).
+#: بتتحدَّد من **المجموع النهائي /100** فقط — مفيش أي مدخل من المرجع.
+#: كل 20% = مستوى: ممتاز ≥80 · جيد جدًا ≥60 · جيد ≥40 · مقبول ≥20 · ضعيف <20.
 DEFAULT_VERDICTS = [
-    {"min": 85, "label": "قريب جدًا من Gemini 2.5 Pro في المقاييس دي 🟢"},
-    {"min": 70, "label": "قريب مع فجوات 🟡"},
-    {"min": 55, "label": "متوسط 🟠"},
-    {"min": 0, "label": "أقل من الحد الأخير — بعيد 🔴"},
+    {"min": 80, "label": "ممتاز"},
+    {"min": 60, "label": "جيد جدًا"},
+    {"min": 40, "label": "جيد"},
+    {"min": 20, "label": "مقبول"},
+    {"min": 0, "label": "ضعيف"},
 ]
 
 #: إعدادات التشغيل الموصى بها (ورقة «إعدادات التشغيل»)
@@ -41,8 +48,8 @@ DEFAULT_SETTINGS = {
     "max_tokens": 4000,
     "ctx_size": 8192,
     "max_answer_chars": 6000,
-    "repeats": 2,
-    "repeat_for": ["LG", "IF", "TL"],
+    "repeats": 1,
+    "repeat_for": [],
 }
 
 
@@ -149,7 +156,7 @@ def build_exam(spec: dict | None = None, *, references: dict | None = None) -> d
     if abs(total_weight - 100.0) > 0.01:
         raise SpecError(f"مجموع أوزان المحاور {total_weight} مش 100.")
 
-    # ── أسئلة الاستكشاف (بلا درجة) ───────────────────────────────────────────
+    # ── أسئلة الاستكشاف (ميزة إضافية — مش بتدخل في المجموع الأساسي) ───────
     profile = [
         {
             "id": str(p.get("id") or ""),
@@ -157,6 +164,8 @@ def build_exam(spec: dict | None = None, *, references: dict | None = None) -> d
             "prompt": str(p.get("prompt") or ""),
             "expert_points": str(p.get("expert_points") or ""),
             "rag_fixes": str(p.get("rag_fixes") or ""),
+            "rubric": list(PROFILE_RUBRIC),
+            "max": PROFILE_MAX,
         }
         for p in profile_in
     ]
@@ -174,6 +183,7 @@ def build_exam(spec: dict | None = None, *, references: dict | None = None) -> d
         "categories": categories,
         "questions": questions,
         "profile": profile,
+        "profile_max": PROFILE_MAX,
         "tools": list(spec.get("tools") or []),
         "verdicts": verdicts,
         "references": dict(refs.get("references") or {}),
@@ -196,6 +206,34 @@ def question_map(exam: dict) -> dict[str, dict]:
 def category_of(exam: dict, qid: str) -> str:
     q = question_map(exam).get(str(qid).upper())
     return str(q.get("category")) if q else ""
+
+
+def all_questions(exam: dict) -> list[dict]:
+    """كل الأسئلة بالترتيب: الـ33 المصحّحة + أسئلة الاستكشاف (P1..P14).
+
+    أسئلة الاستكشاف مبوتوبة category = "PROFILE" عشان المصحّح يفرق بينها
+    (بتتقيم مستقلة ولا تدخل في المجموع الأساسي).
+    """
+    out: list[dict] = list(exam.get("questions") or [])
+    for p in exam.get("profile") or []:
+        out.append(
+            {
+                "id": str(p.get("id") or ""),
+                "category": "PROFILE",
+                "title": str(p.get("domain") or p.get("id") or ""),
+                "prompt": str(p.get("prompt") or ""),
+                "rubric": list(p.get("rubric") or PROFILE_RUBRIC),
+                "method": "استكشافي",
+                "note": "ميزة إضافية — لا تدخل في المجموع الأساسي",
+                "use_tools": False,
+                "quick": False,
+                "profile": True,
+                "domain": str(p.get("domain") or ""),
+                "expert_points": str(p.get("expert_points") or ""),
+                "max": PROFILE_MAX,
+            }
+        )
+    return out
 
 
 def repeats_for(exam: dict, category_key: str) -> int:

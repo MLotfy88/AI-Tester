@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 from .lib import lang_info
+from .checks_profile import PROFILE_MAX, score_profile_question
 from .rubric_engine import aggregate, question_score, score_question, verdict_for
 
 #: لاحقة تمرير التكرار: "LG1__2" ⇒ التمريرة الثانية
@@ -217,12 +218,15 @@ def grade_exam(
                 }
             )
 
-        # ── متوسط المعايير عبر التمريرات (التكرار لأ LG/IF/TL)
-        n_crit = max((len(c) for c in per_pass_criteria), default=len(rubric))
+        # ── معايير السؤال: من **التمريرة الأولى** بس (تمريرة واحدة = درجة واحدة)
+        #   السبب: متوسط التمريرات كان بيخلّي الدرجة ما تطابقش الملاحظة المعروضة
+        #   (نقطة من تمريرة + ملاحظة من تمريرة تانية) ⇒ قرار «المشكلة دي
+        #   عرضية بس» بقى ملغي: دلوقتي درجة واحدة وملاحظة واحدة من نفس الرد.
+        first_criteria = per_pass_criteria[0] if per_pass_criteria else []
         merged: list[dict] = []
-        for i in range(n_crit):
-            points = _avg([float(c[i]["points"]) for c in per_pass_criteria if i < len(c)])
-            notes = [str(c[i]["note"]) for c in per_pass_criteria if i < len(c)]
+        for i, crit in enumerate(first_criteria):
+            points = float(crit.get("points") or 0.0)
+            note = str(crit.get("note") or "")
             merged.append(
                 {
                     "index": i + 1,
@@ -231,8 +235,8 @@ def grade_exam(
                     "max": 2.0,
                     "passed": points >= 2.0,
                     "partial": 0.0 < points < 2.0,
-                    "notes": notes,
-                    "note": notes[0] if notes else "",
+                    "notes": [note] if note else [],
+                    "note": note,
                 }
             )
         per_question_criteria[qid] = merged
@@ -288,6 +292,54 @@ def grade_exam(
             "empty": not any(str(p.get("answer") or "").strip() for p in pass_details),
         }
 
+    # ── الأسئلة الاستكشافية: ميزة إضافية (0..20) — مش بتأثر على المجموع ولا الحكم
+    profile_rows: dict[str, dict] = {}
+    profile_scores: list[float] = []
+    for p in exam.get("profile") or []:
+        pid = str(p.get("id") or "").strip().upper()
+        if not pid:
+            continue
+        passes = answers.get(pid) or []
+        payload = passes[0] if passes else {}
+        text = str(payload.get("answer") or "")
+        res = score_profile_question(
+            text,
+            str(p.get("expert_points") or ""),
+            str(p.get("prompt") or ""),
+        )
+        profile_scores.append(float(res["score"]))
+        profile_rows[pid] = {
+            "id": pid,
+            "domain": str(p.get("domain") or ""),
+            "prompt": str(p.get("prompt") or ""),
+            "expected": str(p.get("expert_points") or ""),
+            "rubric": list(p.get("rubric") or []),
+            "answer": text,
+            "criteria": res["criteria"],
+            "score": res["score"],
+            "max": PROFILE_MAX,
+            "percent": res["percent"],
+            "answered": bool(text.strip()),
+        }
+
+    # التقييم الاستكشافي = متوسط درجات **الأسئلة المجاوبة** (0..20)
+    # (السؤال اللي ما اتبعتش مش بيحسب صفر — هو مش جزء من التقييم أصلاً)
+    answered_scores = [
+        float(row["score"]) for row in profile_rows.values() if row.get("answered")
+    ]
+    profile_total = (
+        round(sum(answered_scores) / len(answered_scores), 2) if answered_scores else 0.0
+    )
+    profile_info = {
+        "questions": profile_rows,
+        "total": profile_total,
+        "max": PROFILE_MAX,
+        "percent": round(100.0 * profile_total / PROFILE_MAX, 2) if PROFILE_MAX else 0.0,
+        "count": len(profile_rows),
+        "answered": len(answered_scores),
+        "note": "ميزة إضافية — لا تؤثر على المجموع الأساسي ولا على الحكم",
+    }
+
     # ── التجميع على مستوى المحاور (وزن + حد أدنى)
     agg = aggregate(exam, per_question_criteria)
     categories = agg["categories"]
@@ -319,6 +371,7 @@ def grade_exam(
         "max": 100.0,
         "categories": categories,
         "questions": rows,
+        "profile": profile_info,
         "verdict": verdict,
         "verdict_note": verdict_note,
         "failed_categories": failed,

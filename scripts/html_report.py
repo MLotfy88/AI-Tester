@@ -71,17 +71,24 @@ def _score_cell(score: Any, maximum: Any, *, bar: bool = True) -> str:
 
 
 def _verdict_class(verdict: Any, status: Any = "") -> str:
+    """CSS class للمستوى — خمسة مستويات: ممتاز · جيد جدًا · جيد · مقبول · ضعيف.
+
+    ⚠ الترتيب مهم: «جيد جدًا» لازم يتفحص **قبل** «جيد» عشان «جيد» substring
+    جواه.
+    """
     text = str(verdict or "")
     if status == "failed":
         return "v-fail"
-    if "جاهز" in text:
-        return "v-ready"
     if "ممتاز" in text:
+        return "v-exc"
+    if "جيد جدًا" in text or "جيد جداً" in text:
+        return "v-vgood"
+    if "جيد" in text:
         return "v-good"
     if "مقبول" in text:
         return "v-ok"
     if "ضعيف" in text:
-        return "v-weak"
+        return "v-bad"
     if "مرفوض" in text or "خطير" in text or "غير موثوق" in text:
         return "v-bad"
     return "v-na"
@@ -120,7 +127,7 @@ def _cat_short(exam_cfg: dict, key: str) -> str:
 
 
 def _gate_badges(exam: dict | None) -> str:
-    """شارات حدود الدنيا لكل محور — الحمراء = محور تحت الحد (فشل حرج)."""
+    """شارات حدود الدنيا لكل محور — الحمراء = محور تحت الحد الأدنى."""
     if not exam:
         return '<span class="pill muted">—</span>'
     chips = []
@@ -324,7 +331,7 @@ def _kpis(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             "kpi-count",
         ),
         (
-            "فشل حرج ⛔",
+            "🔻 ضعيف ⛔",
             f"{len(hard)}",
             "موديل نزل فيه محور عن حدّه الأدنى",
             "kpi-gates",
@@ -399,6 +406,17 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
             if distance is not None
             else "—"
         )
+        prof = exam.get("profile") or {}
+        prof_answered = int(prof.get("answered") or 0)
+        prof_total = prof.get("total")
+        prof_html = (
+            f'<span class="num" dir="ltr">{esc(fmt_num(prof_total, 1))}/'
+            f'{esc(fmt_num(prof.get("max") or 20, 0))}</span>'
+            f'<div class="mut small">{esc(fmt_num(prof.get("percent"), 0))}% · '
+            f'{prof_answered}/{int(prof.get("count") or 0)}</div>'
+            if prof_answered
+            else '<span class="mut">—</span>'
+        )
         rows.append(
             f"""
 <tr class="{'failed-row' if status != 'ok' else ''}">
@@ -409,6 +427,7 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
   </td>
   <td class="verdict-cell"><span class="verdict {_verdict_class(exam.get('verdict'), status)}">{esc(exam.get('verdict') or ("فشل التشغيل" if status != "ok" else "—"))}</span></td>
   <td class="score-total">{_score_cell(total, exam.get("max", 100), bar=False)}</td>
+  <td title="ميزة إضافية — مش بتأثر على الحكم">{prof_html}</td>
   {cat_cells}
   <td>{_gate_badges(exam) if exam else '<span class="pill muted">—</span>'}</td>
   <td><span class="pill {_fit_class(fit.get("fit_class"))}">{esc(fit.get("fit_class") or "—")}</span></td>
@@ -429,7 +448,7 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
 <section class="section" id="results">
   <div class="section-head">
     <div><h2>🏁 المقارنة النهائية</h2><p class="sub">مرتبة بالدرجة من 100.
-    كل محور بيعرض نسبته (0–100%) والـ ⛔ يعني المحور نزل عن حدّه الأدنى = <b>فشل حرج</b> حتى لو المجموع عالي.
+    كل محور بيعرض نسبته (0–100%) والـ ⛔ يعني المحور نزل عن حدّه الأدنى (معلومة للمراجعة — مش بتغيّر الحكم).
     <span class="{GEM_CLASS}">والعمود الأخير (المسافة عن مرجع Gemini) بيختفي لما تطفئ المرجع.</span></p></div>
     <div class="legend"><span class="gate off">فوق الحد</span><span class="gate on">تحت الحد ●</span></div>
   </div>
@@ -437,6 +456,7 @@ def _summary_table(results: list[dict], exam_cfg: dict) -> str:
     <table class="tbl summary-tbl">
       <thead><tr>
         <th>#</th><th>الموديل</th><th>الحكم</th><th>الدرجة</th>
+        <th title="ميزة إضافية — مش بتأثر على الحكم">🔎 استكشافي</th>
         {cat_heads}
         <th>حدود الدنيا</th><th>Fit</th><th>الحجم</th><th>الزمن</th><th>Peak RSS</th><th>tok/s</th>
         <th>⚡ أداء مقيس</th><th class="{GEM_CLASS}">المسافة عن Gemini</th>
@@ -486,9 +506,91 @@ def _categories_section(results: list[dict], exam_cfg: dict) -> str:
     return f"""
 <section class="section" id="categories">
   <div class="section-head"><div><h2>📊 المحاور الثمانية</h2>
-  <p class="sub">لكل محور: الوزن (كم نقطة من الـ 100) والحد الأدنى (النسبة اللي لو نزلت تحتها ⇒ فشل حرج).
+  <p class="sub">لكل محور: الوزن (كم نقطة من الـ 100) والحد الأدنى (النسبة اللي لو نزلت تحتها ⇒ المستوى ضعيف).
   النقاط = النسبة × الوزن.</p></div></div>
   <div class="axis-grid">{''.join(blocks)}</div>
+</section>
+"""
+
+
+def _profile_section(results: list[dict], exam_cfg: dict) -> str:
+    """لوحة الأسئلة الاستكشافية — **ميزة إضافية** (0..20) لا تؤثر على الحكم."""
+    profile_cfg = exam_cfg.get("profile") or []
+    if not profile_cfg:
+        return ""
+    cards = []
+    for result in _ok_models(results):
+        exam = result.get("exam") or {}
+        prof = exam.get("profile") or {}
+        rows_q = prof.get("questions") or {}
+        answered = int(prof.get("answered") or 0)
+        if not rows_q or not answered:
+            continue
+        rows = []
+        for pid, row in rows_q.items():
+            crits = row.get("criteria") or []
+            cells = "".join(
+                f'<td class="num" dir="ltr" title="{esc(c.get("note") or "")}">'
+                f'{esc(fmt_num(c.get("points"), 1))}</td>'
+                for c in crits
+            )
+            note = str(row.get("expected") or "")[:120]
+            rows.append(
+                f"<tr><td><b>{esc(pid)}</b>"
+                f'<div class="mut small">{esc(row.get("domain") or "")}</div></td>'
+                f'<td class="num" dir="ltr"><b>{esc(fmt_num(row.get("score"), 1))}</b>/20</td>'
+                f'<td class="num" dir="ltr">{esc(fmt_num(row.get("percent"), 0))}%</td>'
+                f"{cells}"
+                f'<td class="mut small">{esc(note)}</td></tr>'
+            )
+        dom: dict[str, list[float]] = {}
+        for row in rows_q.values():
+            dom.setdefault(str(row.get("domain") or "—"), []).append(
+                float(row.get("score") or 0)
+            )
+        dom_rows = "".join(
+            f"<tr><td>{esc(d)}</td>"
+            f'<td class="num" dir="ltr">{esc(fmt_num(sum(v) / len(v), 1))}/20</td>'
+            f'<td class="mut small">{len(v)} أسئلة</td></tr>'
+            for d, v in sorted(
+                dom.items(), key=lambda kv: -(sum(kv[1]) / max(1, len(kv[1])))
+            )
+        )
+        cards.append(
+            f"""
+<article class="card">
+  <header class="axis-head">
+    <div><h3>{esc(result.get("model"))}</h3>
+      <div class="mut small">التقييم الاستكشافي = متوسط أداء {answered} سؤال مجاوب</div></div>
+    <div class="axis-qcount"><b class="num" dir="ltr">{esc(fmt_num(prof.get("total"), 1))}</b>/20
+      · {esc(fmt_num(prof.get("percent"), 0))}%</div>
+  </header>
+  <div class="table-wrap">
+    <table class="tbl compact">
+      <thead><tr><th>السؤال</th><th>الدرجة</th><th>النسبة</th>
+      <th>التغطية</th><th>المباشرة</th><th>التنظيم</th><th>العمق</th>
+      <th>النقاط المتوقعة</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody>
+    </table>
+  </div>
+  <div class="table-wrap" style="margin-top:10px">
+    <table class="tbl compact">
+      <thead><tr><th>المجال</th><th>المتوسط</th><th>عدد الأسئلة</th></tr></thead>
+      <tbody>{dom_rows}</tbody>
+    </table>
+  </div>
+</article>"""
+        )
+    if not cards:
+        return ""
+    return f"""
+<section class="section" id="profile">
+  <div class="section-head"><div><h2>🔎 الأسئلة الاستكشافية — ميزة إضافية</h2>
+  <p class="sub">{len(profile_cfg)} سؤال على قدرات إضافية (رعاية صحية · سلاسل إمداد · مالية · كود).
+  التقييم من <b>20</b> (= متوسط أداء الأسئلة المجاوبة) و<b>مش بيأثر على الدرجة الأساسية ولا على الحكم</b> —
+  زي الماجستير في إعلان الوظيفة: وجودها ميزة، غيابها ما بيخصمش.
+  مرّر الماوس على درجة أي معيار عشان تشوف سببها.</p></div></div>
+  <div class="axis-grid">{''.join(cards)}</div>
 </section>
 """
 
@@ -511,7 +613,7 @@ def _gates_section(results: list[dict]) -> str:
   <td class="model-cell">{esc(result.get('model'))}</td>
   <td>{esc(gate.get('title'))}</td>
   <td class="mut">{esc(gate.get('threshold'))}</td>
-  <td>{'<b class="bad">فشل حرج ⛔</b>' if fired else '<span class="ok">فوق الحد ✓</span>'}</td>
+  <td>{'<b class="bad">تحت الحد ⛔</b>' if fired else '<span class="ok">فوق الحد ✓</span>'}</td>
   <td>{_safe_text(gate.get('detail'), 260)}</td>
   <td class="mut small">{esc('، '.join(gate.get('questions') or [])[:120])}</td>
 </tr>"""
@@ -519,7 +621,8 @@ def _gates_section(results: list[dict]) -> str:
     return f"""
 <section class="section" id="gates">
   <div class="section-head"><div><h2>🚦 حدود الدنيا لكل محور</h2>
-  <p class="sub">أي محور نزل عن حدّه الأدنى ⇒ <b>فشل حرج ⛔</b> حتى لو المجموع عالي.
+  <p class="sub">أي محور نزل عن حدّه الأدنى ⛔ — ده **معلومة للمراجعة** (محور ضعيف)،
+  بس **مش بيغيّر الحكم**: المستوى بيتحدَّد من المجموع النهائي.
   دي حدود الدنيا الثمانية في الامتحان v3 (محور لكل حد).</p></div></div>
   <div class="table-wrap">
     <table class="tbl compact">
@@ -953,9 +1056,13 @@ def _guide(run_meta: dict) -> str:
     <summary><span class="guide-h">📖 إزاي تقرأ التقرير</span></summary>
     <div class="guide-grid">
       <div><h4>الدرجة الكلية</h4><p>من 100 = مجموع نقاط المحاور الثمانية (كل محور: نسبته × وزنه).
-      حدود الحكم: <b>≥85</b> «قريب جدًا من Gemini 2.5 Pro في المقاييس دي» · <b>≥70</b> «قريب مع فجوات» ·
-      <b>≥55</b> «متوسط» · أقل من كده «بعيد».
-      <br><span class="mut">الدرجة وحدها مش كفاية: لو أي محور نزل عن حدّه الأدنى ⇒ <b>فشل حرج ⛔</b> حتى لو المجموع عالي.</span></p></div>
+      المستويات الخمسة (كل 20%): <b>≥80</b> «ممتاز» · <b>≥60</b> «جيد جدًا» · <b>≥40</b> «جيد» ·
+      <b>≥20</b> «مقبول» · أقل من كده «ضعيف».
+      <br><span class="mut">المستوى بيتحدَّد من <b>مجموع درجاتك أنت</b> /100 — مش من أي مرجع خارجي.
+      محور تحت حدّه الأدنى ⛔ = معلومة للمراجعة بس، **مش بيغيّر الحكم**.</span></p></div>
+      <div><h4>الأسئلة الاستكشافية (ميزة إضافية)</h4><p>14 سؤال على قدرات إضافية (تشغيل · سلاسل إمداد · مالية · كود).
+      تقييمها من <b>20</b> (= متوسط أداء الأسئلة) و<b>مش بيأثر على الدرجة الأساسية ولا على الحكم</b> —
+      زي الماجستير في إعلان الوظيفة: وجودها ميزة، غيابها ما بيخصمش.</p></div>
       <div><h4>حدود الدنيا</h4><p>العامية 60% · أسلوب Gemini 50% · المنطق 60% · الصدق 60% · الالتزام 60% ·
       التوثيق 50% · النقد 0% · الأدوات 50%.
       <br><span class="mut">الحد الأدنى = أقل نسبة مقبولة في المحور؛ النزول تحته بطل المحور كله.</span></p></div>
@@ -1122,10 +1229,13 @@ html[data-theme=light] .tbl thead th{background:rgba(226,232,240,.98);color:#334
 .bar.sm{height:5px;min-width:42px}
 .bar i{display:block;height:100%;background:var(--grad);border-radius:999px}
 .verdict,.pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;border:1px solid var(--bd);white-space:nowrap}
-.verdict.v-ready,.verdict.v-good{background:rgba(52,211,153,.14);color:var(--okfg);border-color:rgba(52,211,153,.4)}
+/* مستويات الحكم الخمسة — بتتحدَّد من المجموع النهائي /100 فقط */
+.verdict.v-exc{background:rgba(52,211,153,.16);color:#6ee7b7;border-color:rgba(52,211,153,.45)}
+.verdict.v-vgood{background:rgba(56,189,248,.14);color:#7dd3fc;border-color:rgba(56,189,248,.4)}
+.verdict.v-good{background:rgba(163,230,53,.14);color:#bef264;border-color:rgba(163,230,53,.4)}
 .verdict.v-ok{background:rgba(251,191,36,.14);color:var(--warnfg);border-color:rgba(251,191,36,.4)}
-.verdict.v-weak{background:rgba(251,146,60,.15);color:#fdba74;border-color:rgba(251,146,60,.42)}
 .verdict.v-bad,.verdict.v-fail{background:rgba(251,113,133,.15);color:var(--badfg);border-color:rgba(251,113,133,.42)}
+.verdict.v-ready{background:rgba(52,211,153,.14);color:var(--okfg);border-color:rgba(52,211,153,.4)}
 .verdict.v-na,.pill.muted{background:var(--inset);color:var(--mut)}
 .pill.v-good{color:var(--okfg);border-color:rgba(52,211,153,.4)} .pill.v-ok{color:var(--warnfg);border-color:rgba(251,191,36,.4)} .pill.v-bad{color:var(--badfg);border-color:rgba(251,113,133,.4)}
 .gate{display:inline-flex;align-items:center;justify-content:center;min-width:34px;border-radius:7px;padding:2px 6px;font-size:10.5px;font-weight:800;border:1px solid var(--bd);margin:1px}
@@ -1507,6 +1617,7 @@ def build_html(results: list[dict], exam_cfg: dict, run_meta: dict | None = None
             radar_section(results, exam_cfg),
             charts_section(results, exam_cfg),
             _categories_section(results, exam_cfg),
+            _profile_section(results, exam_cfg),
             _heatmap(results, exam_cfg),
             _gates_section(results),
             _perf_section(results, run_meta),
@@ -1535,7 +1646,7 @@ def build_html(results: list[dict], exam_cfg: dict, run_meta: dict | None = None
   <nav>
     <a href="#overview">نظرة عامة</a><a href="#results">المقارنة</a><a href="#cards">النتيجة لكل موديل</a>
     <a href="#radar">الرسم السداسي</a><a href="#charts">رسوم المقارنة</a>
-    <a href="#categories">المحاور</a>
+    <a href="#categories">المحاور</a><a href="#profile">الاستكشافي</a>
     <a href="#heatmap">خريطة الدرجات</a><a href="#gates">حدود الدنيا</a>
     <a href="#perf">الأداء المقيس</a><a href="#speed">جدول السرعة</a><a href="#fit">الملاءمة</a>
     <a href="#settings">الإعدادات</a>

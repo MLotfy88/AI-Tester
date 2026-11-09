@@ -645,11 +645,15 @@ def _tl1_call_format(text: str, ctx: dict) -> tuple[float, str]:
 
 
 def _tl1_final_summary(text: str, ctx: dict) -> tuple[float, str]:
-    """R5: رد نهائي يلخص اللي حصل."""
-    w = word_count(text)
-    mentions_stock = contains_any(text, ("المخزون", "المخزن", "الكمية", "stock", "SUT-45", "sut-45", "60", "٦٠"))
+    """R5: رد نهائي يلخص اللي حصل (مش مجرد استدعاء أداة)."""
+    body = text or ""
+    w = word_count(body)
+    # الرد لو مجرد JSON استدعاء أداة ⇒ مفيش رد نهائي (النص كله استدعاء).
+    if re.search(r"[\"\']name[\"\']\s*:", body) and w < 15:
+        return 0.0, "مفيش رد نهائي — استدعاء أداة بس"
+    mentions_stock = contains_any(body, ("المخزون", "المخزن", "الكمية", "stock", "SUT-45", "sut-45", "60", "٦٠"))
     mentions_po = contains_any(
-        text, ("أمر الشراء", "أمر شراء", "الطلب", "PO", "أنشأ", "تم إنشاء", "عملت", "تم")
+        body, ("أمر الشراء", "أمر شراء", "الطلب", "PO", "أنشأ", "تم إنشاء", "عملت", "تم")
     )
     if mentions_stock and mentions_po and w >= 15:
         return 2.0, "ملخص نهائي واضح ✓"
@@ -751,7 +755,7 @@ def _tl2_stock_optional(text: str, ctx: dict) -> tuple[float, str]:
         ("المخزون", "المخزن", "أتحقق", "نتأكد", "أراجع", "الكمية المتاحة", "stock", "المتاح"),
     ):
         return 2.0, "عرض التأكد من المخزون ✓"
-    return 1.0, "مفيش عرض للتأكد من المخزون (اختياري)"
+    return 2.0, "مفيش عرض للتأكد — اختياري ومش مطلوب ✓"
 
 
 # ------------------------------------------------------------------ TL3

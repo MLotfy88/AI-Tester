@@ -12,14 +12,15 @@
        · نسبة المحور = مجموع درجات أسئلته / (10 × عدد أسئلته) × 100
        · نقاط المحور = نسبة المحور × وزن المحور
        · المجموع = مجموع نقاط المحاور (0..100)
-  3. البوابة: أي محور نزل عن `min_percent` ⇒ **فشل حرج**.
+  3. الحكم: من **المجموع النهائي** بس (كل 20% مستوى) — محاور الحد الأدنى
+     بتتعرض كمعلومة بس **مش بتغيّر الحكم**.
 """
 from __future__ import annotations
 
 import inspect
 from typing import Any, Callable
 
-from .rubric_lib import fail, ok
+from .rubric_lib import fail, is_non_answer, ok
 
 # نوع الفحص: (text, ctx) -> (points, note)
 Check = Callable[[str, dict], tuple[float, str]]
@@ -88,6 +89,26 @@ def score_question(
                 }
             )
         return out
+
+    # ── حارس «رد مش إجابة» ──────────────────────────────────────────────────
+    # ⚠ الموديل أحياناً بينسخ السؤال أو بيرد برد ميتا («أبحث عن السؤال…»).
+    #   الفحوص النصية كانت بتاخد نقاط من النص المنسوخ (مثلاً MRP/Kanban
+    #   في ST3) ⇒ دلوقتي الرد ده = صفر على السؤال كله.
+    #   ملاحظة: أسئلة الأدوات (TL) مستثناة — الرد فيها استدعاء أداة مش نص.
+    if not (ctx.get("tool_calls") or []):
+        non_answer, why = is_non_answer(text or "", str(ctx.get("prompt") or ""))
+        if non_answer:
+            for idx in range(5):
+                label = rubric[idx] if idx < len(rubric) else ""
+                out.append(
+                    {
+                        **fail(f"رد مش إجابة — {why}"),
+                        "label": label,
+                        "passed": False,
+                        "partial": False,
+                    }
+                )
+            return out
 
     if not checks:
         for idx in range(5):
@@ -176,24 +197,29 @@ def aggregate(
 
 
 def verdict_for(exam: dict, total: float, failed_categories: list[str]) -> tuple[str, str]:
-    """الحكم النهائي: مجموع الدرجات + بوابة الحد الأدنى (فشل حرج).
+    """الحكم النهائي: **المستوى بيتحدَّد من المجموع النهائي /100 فقط**.
 
-    حدود الحكم (ورقة «الملخص»): 85 / 70 / 55.
+    · مستويات الحكم الخمسة (كل 20% مستوى):
+      ممتاز ≥80 · جيد جدًا ≥60 · جيد ≥40 · مقبول ≥20 · ضعيف <20.
+    · محاور الحد الأدنى (`min_percent`) **معلومة فقط** — بتظهر في التقرير
+      وفي سبب الحكم، بس **مش بتغيّر المستوى** (المستوى من المجموع وخلاص).
+    · المرجع (Gemini 2.5 Pro) **عرض فقط** — مالوش أي دور هنا.
     """
+    note = f"المجموع {total}/100"
     if failed_categories:
         cats = "، ".join(
             f"{(exam.get('categories') or {}).get(k, {}).get('name', k)}" for k in failed_categories
         )
-        return "فشل حرج ⛔", f"محور تحت الحد الأدنى: {cats}"
+        note = f"{note} · محور تحت الحد الأدنى: {cats}"
 
     thresholds = list(exam.get("verdicts") or [])
     for row in thresholds:
         try:
             if total >= float(row.get("min", 0)):
-                return str(row.get("label") or ""), f"المجموع {total}/100"
+                return str(row.get("label") or ""), note
         except (TypeError, ValueError):
             continue
-    return "غير محدَّد", f"المجموع {total}/100"
+    return "غير محدَّد", note
 
 
 __all__ = [

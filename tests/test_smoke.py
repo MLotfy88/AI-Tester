@@ -19,7 +19,15 @@ if str(SCRIPTS) not in sys.path:
 
 from common import load_exam  # noqa: E402
 from exam.grader import grade_exam  # noqa: E402
-from exam.rubric_engine import ALL_CHECKS, aggregate, has_checks, score_question  # noqa: E402
+from exam.rubric_engine import (  # noqa: E402
+    ALL_CHECKS,
+    aggregate,
+    has_checks,
+    score_question,
+    verdict_for,
+)
+from exam.checks_profile import score_profile_question  # noqa: E402
+from exam.spec import all_questions, build_exam, repeats_for, total_planned_requests  # noqa: E402
 from exam.spec import build_exam, repeats_for, total_planned_requests  # noqa: E402
 from references import (  # noqa: E402
     category_short,
@@ -188,28 +196,34 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(settings["ctx_size"], 8192)
         self.assertEqual(settings["max_tokens"], 4000)
         self.assertEqual(settings["seed"], 1234)
-        self.assertEqual(settings["repeats"], 2)
-        self.assertEqual(sorted(settings["repeat_for"]), ["IF", "LG", "TL"])
+        self.assertEqual(settings["repeats"], 1, "كل سؤال بتمريرة واحدة")
+        self.assertEqual(list(settings["repeat_for"]), [])
 
     def test_system_prompt_comes_from_spec(self) -> None:
         exam = load_exam()
         self.assertTrue(exam["system_prompt"], "لازم system_prompt_style من ملف المواصفات")
         self.assertNotIn("owner_system_prompt", str(exam["system_prompt"]).lower())
 
-    def test_repeats_only_for_lg_if_tl(self) -> None:
+    def test_single_pass_for_every_axis(self) -> None:
         exam = load_exam()
-        self.assertEqual(repeats_for(exam, "LG"), 2)
-        self.assertEqual(repeats_for(exam, "IF"), 2)
-        self.assertEqual(repeats_for(exam, "TL"), 2)
-        self.assertEqual(repeats_for(exam, "EG"), 1)
-        self.assertEqual(repeats_for(exam, "HN"), 1)
+        for key in ("LG", "IF", "TL", "EG", "HN", "ST", "DC", "BR"):
+            self.assertEqual(repeats_for(exam, key), 1, key)
 
     def test_total_planned_requests(self) -> None:
         exam = load_exam()
-        # 33 سؤال + تمريرة إضافية لكل سؤال في LG/IF/TL (6+4+3=13) + 14 استكشافي
+        # 33 سؤال مصحّح (تمريرة واحدة) + 14 سؤال استكشافي
         total = total_planned_requests(exam)
-        self.assertEqual(total, 33 + 13 + 14)
-        self.assertEqual(total_planned_requests(exam, include_profile=False), 33 + 13)
+        self.assertEqual(total, 33 + 14)
+        self.assertEqual(total_planned_requests(exam, include_profile=False), 33)
+
+    def test_all_questions_includes_profile(self) -> None:
+        exam = load_exam()
+        every = all_questions(exam)
+        self.assertEqual(len(every), 33 + 14)
+        ids = [q["id"] for q in every]
+        self.assertEqual(ids[:33], [q["id"] for q in exam["questions"]])
+        self.assertTrue(all(q.get("profile") for q in every[33:]))
+        self.assertTrue(all(q["category"] == "PROFILE" for q in every[33:]))
 
     def test_build_exam_rejects_bad_spec(self) -> None:
         with self.assertRaises(Exception):
@@ -239,7 +253,7 @@ class GraderTests(unittest.TestCase):
         exam = load_exam()
         graded = grade_exam({}, exam)
         self.assertEqual(graded["total"], 0.0)
-        self.assertEqual(graded["verdict"], "فشل حرج ⛔")
+        self.assertEqual(graded["verdict"], "ضعيف")
         # BR حدّه الأدنى 0 ⇒ مش بيفشل حتى لو 0% ⇒ 7 محاور فاشلة من 8
         self.assertEqual(len(graded["failed_categories"]), 7)
         self.assertNotIn("BR", graded["failed_categories"])
@@ -289,11 +303,10 @@ class GraderTests(unittest.TestCase):
             self.assertIn(f"MIN_{key}", fired)
         self.assertEqual(len(fired), len(graded["failed_categories"]))
 
-    def test_repeats_use_average(self) -> None:
-        """سؤال متكرر بمررتين ⇒ الدرجة = متوسط المررتين."""
+    def test_score_comes_from_first_pass(self) -> None:
+        """تمريرة واحدة = درجة واحدة: الدرجة من التمريرة الأولى (مش متوسط)."""
         exam = load_exam()
         qid = "LG1"
-        self.assertEqual(repeats_for(exam, "LG"), 2)
         good = (
             "أرسم من صندوق «مشكّل». لأن الملصق غلط، فالصندوق فيه نوع واحد. "
             "يعني صندوق «تفاح» فيه برتقال، وصندوق «برتقال» فيه تفاح."
@@ -304,11 +317,90 @@ class GraderTests(unittest.TestCase):
         self.assertEqual(two["questions"][qid]["passes"], 2)
         self.assertAlmostEqual(
             two["questions"][qid]["score"],
-            (one["questions"][qid]["score"] + 4.0) / 2.0,
-            places=1,
-            msg="المتوسط لازم يكون بين نتيجتي التمريرتين",
+            one["questions"][qid]["score"],
+            places=2,
+            msg="الدرجة لازم تكون من التمريرة الأولى",
         )
-        self.assertLess(two["questions"][qid]["score"], one["questions"][qid]["score"])
+
+    def test_verdict_bands_follow_percentage_steps(self) -> None:
+        """المستويات الخمسة = كل 20% من المجموع (مفيش بوابة تأثر على الحكم)."""
+        exam = load_exam()
+        cases = {
+            100: "ممتاز",
+            80: "ممتاز",
+            79.9: "جيد جدًا",
+            60: "جيد جدًا",
+            59.9: "جيد",
+            40: "جيد",
+            39.9: "مقبول",
+            20: "مقبول",
+            19.9: "ضعيف",
+            0: "ضعيف",
+        }
+        for total, expected in cases.items():
+            label, _note = verdict_for(exam, float(total), [])
+            self.assertEqual(label, expected, f"{total} ⇒ {label}")
+
+    def test_gate_does_not_change_verdict(self) -> None:
+        """محور تحت حدّه الأدنى = معلومة بس — الحكم من المجموع."""
+        exam = load_exam()
+        label, note = verdict_for(exam, 95.0, ["HN"])
+        self.assertEqual(label, "ممتاز")
+        self.assertIn("محور تحت الحد الأدنى", note)
+
+    def test_echoed_answer_scores_zero(self) -> None:
+        """رد منسوخ من السؤال (مش إجابة) ⇒ صفر على السؤال."""
+        exam = load_exam()
+        q = {x["id"]: x for x in exam["questions"]}["ST3"]
+        echo = (
+            "هذا هو السؤال الذي أرسلته: اشرح الفرق بين MRP و Kanban "
+            "للمخزون الطبي بالتنسيق ده بالظبط.\n\n"
+            "أنا أبحث عن السؤال الذي تريد إجابةه. هل لديك أسئلة أخرى؟"
+        )
+        criteria = score_question("ST3", echo, {"prompt": q["prompt"]}, q["rubric"])
+        self.assertEqual(sum(c["points"] for c in criteria), 0.0)
+        self.assertIn("رد مش إجابة", criteria[0]["note"])
+
+    def test_profile_is_extra_and_does_not_affect_verdict(self) -> None:
+        """الأسئلة الاستكشافية: تقييم مستقل (0..20) لا بيغيّر المجموع ولا الحكم."""
+        exam = load_exam()
+        base = grade_exam({q["id"]: GOOD_ANSWER for q in exam["questions"]}, exam)
+        with_profile = grade_exam(
+            {
+                **{q["id"]: GOOD_ANSWER for q in exam["questions"]},
+                "P1": [
+                    {
+                        "answer": (
+                            "- نسبة استغلال الغرفة 70%\n"
+                            "- زمن تجهيز الغرفة 20 دقيقة\n"
+                            "- نسبة المضاعفات 3%\n"
+                            "مثال: لو sensitization زادت، ده مؤثر على التكلفة."
+                        )
+                    }
+                ],
+            },
+            exam,
+        )
+        self.assertAlmostEqual(base["total"], with_profile["total"], places=2)
+        self.assertEqual(base["verdict"], with_profile["verdict"])
+        prof = with_profile["profile"]
+        self.assertEqual(prof["max"], 20.0)
+        self.assertEqual(prof["answered"], 1)
+        self.assertEqual(prof["count"], 14)
+        self.assertGreater(prof["total"], 0.0)
+        self.assertLessEqual(prof["total"], 20.0)
+
+    def test_profile_scoring_is_bounded(self) -> None:
+        res = score_profile_question(
+            "- نسبة استغلال الغرفة 70%\n- زمن تجهيز الغرفة 20 دقيقة\n- تكلفة الحالة",
+            "نسبة استغلال الغرفة، زمن تجهيز الغرفة بين الحالات، تكلفة الحالة",
+            "اذكر مؤشرات الأداء",
+        )
+        self.assertEqual(len(res["criteria"]), 4)
+        self.assertGreaterEqual(res["score"], 0.0)
+        self.assertLessEqual(res["score"], 20.0)
+        empty = score_profile_question("", "", "")
+        self.assertEqual(empty["score"], 0.0)
 
     def test_qid_suffixed_repeats_supported(self) -> None:
         exam = load_exam()

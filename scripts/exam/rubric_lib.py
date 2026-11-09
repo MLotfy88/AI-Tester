@@ -162,6 +162,78 @@ def duplicate_lines(text: str) -> int:
     return dupes
 
 
+# --------------------------------------------------------------------------- تكرار ونسخ
+#: علامات «رد مش إجابة» — رد بيرد على السؤال بدل ما يجاوب عليه.
+META_ANSWER_MARKERS = (
+    "هذا هو السؤال",
+    "السؤال الذي أرسلته",
+    "السؤال اللي أرسلته",
+    "الهدف من هذه الاستفسار",
+    "الهدف من الاستفسار",
+    "أبحث عن السؤال",
+    "هل يمكنك إعادة توجيه",
+    "هل لديك أسئلة أخرى",
+    "إعادة صياغة السؤال",
+)
+
+
+def repetition_score(text: str) -> float:
+    """نسبة تكرار متكيفة: n-gram أصغر على النصوص القصيرة.
+
+    `repetition_ratio` بـ n=5 بيرجّع 0 على نص من 6 كلمات ⇒ جملة مكررة 3 مرات
+    كانت بتفوت الفحص. هنا بنختار n حسب طول النص.
+    """
+    toks = words(strip_tashkeel(text))
+    n = 5 if len(toks) >= 12 else (3 if len(toks) >= 6 else 2)
+    return repetition_ratio(text, n)
+
+
+def repeated_clause_count(text: str, min_words: int = 3) -> int:
+    """أكتر عدد مرات تكرار نفس الجملة (بعد التقسيم على علامات الوقف)."""
+    parts = re.split(r"[,،؛;.!\n؟?]+", text or "")
+    counts: dict[str, int] = {}
+    best = 0
+    for part in parts:
+        toks = words(strip_tashkeel(part))
+        if len(toks) < min_words:
+            continue
+        key = " ".join(toks)
+        counts[key] = counts.get(key, 0) + 1
+        best = max(best, counts[key])
+    return best
+
+
+def copied_ratio(text: str, prompt: str) -> float:
+    """نسبة كلمات الرد اللي متطابقة مع السؤال (LCS على مستوى الكلمات)."""
+    a = words(strip_tashkeel(text))
+    b = words(strip_tashkeel(prompt))
+    if not a or not b:
+        return 0.0
+    prev = [0] * (len(b) + 1)
+    for x in a:
+        cur = [0]
+        for j, y in enumerate(b):
+            cur.append(prev[j] + 1 if x == y else max(cur[j], prev[j + 1]))
+        prev = cur
+    return round(prev[-1] / len(a), 3)
+
+
+def is_non_answer(text: str, prompt: str = "") -> tuple[bool, str]:
+    """هل الرد «مش إجابة»؟ (نسخ السؤال · رد ميتا · رد فاضي)."""
+    body = (text or "").strip()
+    if not body:
+        return True, "رد فاضي"
+    low = strip_tashkeel(body.lower())
+    for marker in META_ANSWER_MARKERS:
+        if marker.lower() in low:
+            return True, f"رد مش إجابة ({marker})"
+    if prompt and len(words(body)) >= 8:
+        ratio = copied_ratio(body, prompt)
+        if ratio >= 0.6:
+            return True, f"رد مش إجابة (نسخ {int(ratio * 100)}% من السؤال)"
+    return False, ""
+
+
 # --------------------------------------------------------------------------- اللغة
 def ar_ratio(text: str) -> float:
     t = text or ""
@@ -292,6 +364,7 @@ __all__ = [
     "code_blocks",
     "contains_any",
     "contains_groups",
+    "copied_ratio",
     "count_any",
     "dialect_hits",
     "dialect_per_1k",
@@ -300,6 +373,7 @@ __all__ = [
     "english_tokens",
     "fail",
     "foreign_hits",
+    "is_non_answer",
     "has_code",
     "has_int",
     "has_number_near",
@@ -317,7 +391,9 @@ __all__ = [
     "position_of",
     "question_count",
     "refusal_count",
+    "repeated_clause_count",
     "repetition_ratio",
+    "repetition_score",
     "sentence_count",
     "sentences",
     "table_rows",

@@ -386,8 +386,8 @@ def radar_section(results: list[dict], exam_cfg: dict) -> str:
       </div>
       <div class="card note">
         <b>طريقة القراءة:</b> لو المضلّع <b>مش متساوي</b> ⇒ فيه محور ضعيف حتى لو المجموع عالي —
-        وده بالظبط اللي بيفرق في القرار. وكل محور نزل عن حدّه الأدنى = <b>فشل حرج ⛔</b>
-        حتى لو المجموع عالي.
+        وده بالظبط اللي بيفرق في القرار. وكل محور نزل عن حدّه الأدنى = <b>⛔ معلومة للمراجعة</b>
+        (مش بيغيّر الحكم — الحكم من المجموع).
       </div>
     </div>
   </div>
@@ -603,17 +603,22 @@ def _short_model(name: str, limit: int = 26) -> str:
 
 
 def _verdict_class(verdict: Any) -> str:
-    """تصنيف CSS للحكم — نفس منطق html_report (مفيش استيراد دائري)."""
+    """تصنيف CSS للمستوى — نفس منطق html_report (مفيش استيراد دائري).
+
+    خمسة مستويات: ممتاز · جيد جدًا · جيد · مقبول · ضعيف.
+    """
     text = str(verdict or "")
-    if "فشل حرج" in text:
-        return "v-bad"
-    if "قريب جدًا" in text:
+    if "ممتاز" in text:
+        return "v-exc"
+    if "جيد جدًا" in text or "جيد جداً" in text:
+        return "v-vgood"
+    if "جيد" in text:
         return "v-good"
-    if "قريب مع فجوات" in text:
+    if "مقبول" in text:
         return "v-ok"
-    if "متوسط" in text:
-        return "v-weak"
-    if "بعيد" in text:
+    if "ضعيف" in text:
+        return "v-bad"
+    if "مرفوض" in text or "خطير" in text or "غير موثوق" in text:
         return "v-bad"
     return "v-na"
 
@@ -689,7 +694,7 @@ def model_cards_section(results: list[dict], exam_cfg: dict) -> str:
             pct = float(row.get("percent") or 0.0)
             under = bool(row.get("failed_min"))
             under_html = (
-                '<span class="trust-flag" title="تحت الحد الأدنى — فشل حرج">⛔</span>' if under else ""
+                '<span class="trust-flag" title="تحت الحد الأدنى">⛔</span>' if under else ""
             )
             axis_bars += (
                 f'<div class="mc-axis"><span class="mc-axis-l">{esc(label)}</span>'
