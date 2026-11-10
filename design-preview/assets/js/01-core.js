@@ -5,7 +5,7 @@ const DATA = JSON.parse(document.getElementById("payload").textContent);
 const MODELS = DATA.models;
 const CFG = DATA.cfg;
 
-const COLORS = ["#5AA9FF", "#35D6C0", "#A78BFA", "#FF8FA3", "#6EE7B7", "#F5C45E"];
+const COLORS = ["#5AA9FF", "#35D6C0", "#A78BFA", "#FF8FA3", "#6EE7B7", "#F5C45E", "#38BDF8", "#E879F9", "#94A3B8", "#FACC15"];
 /* حالة المرجع كـ attribute (مرجع عرض فقط — مش بيشارك في الدرجة ولا الحكم) */
 const GEM_ATTR = { on: 'data-gem="on"', off: 'data-gem="off"' };
 const VERDICT_BANDS = [

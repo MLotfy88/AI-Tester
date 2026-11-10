@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تقرير امتحان المساعد المصري — «مِحْيَر»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=Almarai:wght@400;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>__CSS__</style>
+</head>
+<body>
+
+<div class="grain" aria-hidden="true"></div>
+
+<!-- ══════════════ TOP BAR ══════════════ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <div>
+      <div class="brand-name">مِحْيَر</div>
+      <div class="brand-sub">تقرير قياس النماذج · امتحان المساعد المصري</div>
+    </div>
+  </div>
+  <div class="topbar-meta" id="topMeta"></div>
+  <div class="topbar-actions">
+    <div class="legend-chip" id="gates"><i class="sw sw-gate"></i>محور تحت حدّه الأدنى</div>
+    <div class="legend-chip"><i class="sw sw-extra"></i>ميزة إضافية</div>
+    <button class="ref-toggle exam-show-gemini" id="show-gemini" type="button" data-gem="on">🎯 المرجع</button>
+    <button class="btn-ghost" id="btnPrint" type="button">طباعة / PDF</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ══════════════ HERO ══════════════ -->
+  <section class="hero">
+    <div class="hero-left">
+      <div class="eyebrow" id="heroEyebrow">امتحان المساعد المصري</div>
+      <h1 class="hero-title">من 100 نقطة، إلى <em>قرار</em>.</h1>
+      <p class="hero-lede">
+        ٣٣ سؤال مصحَّح حتمياً في ٨ محاور بأوزان، و١٤ سؤال استكشافي <b>بره</b> الحساب.
+        كل رقم هنا <b>مقيس</b> — مفيش تقدير، مفيش مرجع بيشارك في الحكم.
+      </p>
+      <div class="hero-stats" id="heroStats"></div>
+    </div>
+    <aside class="hero-note">
+      <div class="note-label">كيف بتقرأ التقرير</div>
+      <ol class="note-list">
+        <li><b>مقياس الحكم</b> — الدرجة الأساسية فقط (٠–١٠٠) هي اللي بتحدّد المستوى.</li>
+        <li><b>⛔ محور تحت الحد</b> — معلومة للمراجعة، <b>مش</b> بتفرض مستوى تاني.</li>
+        <li><b>🔎 الميزة الإضافية</b> — تقييم مستقل من ٢٠ (زي الماجستير: وجودها ميزة، غيابها ما بيخصمش).</li>
+      </ol>
+    </aside>
+  </section>
+
+  <!-- ══════════════ VERDICT SCALE ══════════════ -->
+  <section class="panel" id="sec-scale">
+    <div class="panel-head">
+      <h2><span class="pn">01</span> مقياس الحكم</h2>
+      <p class="panel-sub">الدرجة الأساسية /100 · الشرائح الخمسة كل ٢٠٪</p>
+    </div>
+    <div class="scale-wrap" id="scaleWrap"></div>
+  </section>
+
+  <!-- ══════════════ MODEL SPEC SHEETS ══════════════ -->
+  <section class="panel" id="sec-models">
+    <div class="panel-head">
+      <h2><span class="pn">02</span> بطاقات الموديلات</h2>
+      <p class="panel-sub">اضغط على أي بطاقة عشان تبعّدها في باقي الأقسام</p>
+    </div>
+    <div class="spec-grid" id="specGrid"></div>
+  </section>
+
+  <!-- ══════════════ AXIS COMPARISON ══════════════ -->
+  <section class="panel" id="sec-axes">
+    <div class="panel-head">
+      <h2><span class="pn">03</span> المقارنة على المحاور</h2>
+      <p class="panel-sub">٨ محاور · كل شريط = نسبة موديل · العلامة العمودية = الحد الأدنى</p>
+    </div>
+    <div class="axes-layout">
+      <div class="radar-wrap panel-sub-panel" id="radar">
+        <div class="radar-head">
+          <span>شكل الأداء</span>
+          <div class="radar-legend" id="radarLegend"></div>
+        </div>
+        <div id="radarHost" class="radar-host"></div>
+        <div class="radar-hint">اضغط على <b>اسم أي موديل</b> في القائمة فوق عشان تخفيه من الرسم
+          أو تظهره تاني — عشان تقارن بين اتنين بس.</div>
+      </div>
+      <div class="axis-cards" id="categories"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ EXPLORATORY ══════════════ -->
+  <section class="panel panel-extra" id="sec-extra">
+    <div class="panel-head">
+      <h2><span class="pn">04</span> الميزة الإضافية — الأسئلة الاستكشافية</h2>
+      <p class="panel-sub">١٤ سؤال · تقييم من ٢٠ · <b>لا يدخل في المجموع ولا في الحكم</b></p>
+    </div>
+    <div class="extra-layout">
+      <div class="extra-dials" id="extraDials"></div>
+      <div class="extra-detail">
+        <div class="extra-tabs" id="extraTabs"></div>
+        <div class="extra-domains" id="extraDomains"></div>
+        <div class="extra-grid" id="extraGrid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ DOSSIER ══════════════ -->
+  <section class="panel" id="sec-dossier">
+    <div class="panel-head">
+      <h2><span class="pn">05</span> ملف الأسئلة</h2>
+      <p class="panel-sub">كل سؤال · درجته من ١٠ · المعايير الخمسة وأسبابها · اضغط للتفاصيل</p>
+    </div>
+    <div class="filters">
+      <div class="chips" id="fModels"></div>
+      <div class="chips" id="fCats"></div>
+      <div class="chips" id="fStates"></div>
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="fSearch" type="search" placeholder="ابحث في السؤال أو الإجابة…" autocomplete="off">
+      </div>
+    </div>
+    <div class="dossier-bar" id="dossierBar"></div>
+    <div class="dossier" id="answers"></div>
+  </section>
+
+  <!-- ══════════════ PERF & ENV ══════════════ -->
+  <section class="panel" id="sec-perf">
+    <div class="panel-head">
+      <h2><span class="pn">06</span> الأداء والبيئة</h2>
+      <p class="panel-sub">كل الأرقام مقيسة فعلياً على GPU</p>
+    </div>
+    <div class="perf-layout">
+      <div class="perf-table-wrap"><table class="perf-table" id="perfTable"></table></div>
+      <div class="gemini-card" id="geminiCard"></div>
+    </div>
+  </section>
+
+  <footer class="foot" id="foot"></footer>
+</main>
+
+<!-- ══════════════ DRAWER ══════════════ -->
+<div class="drawer-scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="تفاصيل السؤال">
+  <button class="drawer-close" id="drawerClose" type="button" aria-label="إغلاق">✕</button>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>__JS__</script>
+</body>
+</html>

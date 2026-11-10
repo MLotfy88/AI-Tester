@@ -24,7 +24,7 @@ from common import dump_json_for_html, now_iso
 from references import category_short, infer_runner_meta, runner_label
 
 #: ألوان الموديلات في الرسوم (نفس ترتيب `design-preview/assets/js/01-core.js`).
-COLORS = ["#5AA9FF", "#35D6C0", "#A78BFA", "#FF8FA3", "#6EE7B7", "#F5C45E"]
+COLORS = ["#5AA9FF", "#35D6C0", "#A78BFA", "#FF8FA3", "#6EE7B7", "#F5C45E", "#38BDF8", "#E879F9", "#94A3B8", "#FACC15"]
 
 # ═════════════════════════════════════════════════════════ CSS / JS / HTML
 # الثوابت دي (CSS/JS/TEMPLATE) بتتستبدل وقت التوليد — design-preview/sync_to_tool.py.
