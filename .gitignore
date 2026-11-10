@@ -32,3 +32,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# المعاينة المولّدة (تصميم) — مش جزء من المستودع
+design-preview/exam-report-v2.html
