@@ -125,12 +125,12 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         + ("أرقام السرعة **مقيسة فعلياً على GPU**." if measured_on_gpu(run_meta)
            else "تشغيل CPU (مفيش GPU) — أرقام السرعة مقيسة على المعالج."),
         "",
-        "| # | الموديل | الحالة | الدرجة /100 | الحكم | محاور تحت الحد الأدنى | "
+        "| # | الموديل | الحالة | الدرجة /100 | 🔎 استكشافي /20 | الحكم | محاور تحت الحد الأدنى | "
         + " | ".join(str(categories.get(k, {}).get("short") or k) for k in cat_keys)
         + " | Fit | tok/s | الزمن |",
         "|---|---|---|---|---|---|"
         + "---|" * len(cat_keys)
-        + "---|---|---|",
+        + "---|---|---|---|",
     ]
 
     for i, result in enumerate(results, 1):
@@ -155,8 +155,16 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
             f"{round(float(tg_avg), 1)} ⚠" if tg_avg is not None and competing
             else (round(float(tg_avg), 1) if tg_avg is not None else "—")
         )
+        prof = exam.get("profile") or {}
+        prof_answered = int(prof.get("answered") or 0)
+        prof_cell = (
+            f"{prof.get('total'):g}/20 · {prof_answered}/{int(prof.get('count') or 0)}"
+            if prof_answered
+            else "—"
+        )
         lines.append(
             f"| {i} | `{result.get('model', '')}` | {status} | {exam.get('total', '—')} | "
+            f"{prof_cell} | "
             f"{exam.get('verdict') or (result.get('error') or '—')} | {failed_names} | "
             f"{axis_vals} | {fit.get('fit_class', '—')} | {speed_cell} | "
             f"{round((rt.get('seconds_total') or 0) / 60, 1)} د |"
@@ -177,7 +185,9 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         lines += [
             "",
             f"| — | **🎯 {gemini.get('name', 'Gemini 2.5 Pro')}** (مرجع عرض فقط) | مرجع | "
-            f"{avg if avg is not None else '—'} | — | — | " + " | ".join(ref_cells) + " | — | — | — |",
+            f"{avg if avg is not None else '—'} | — | — | — | "
+            + " | ".join(ref_cells)
+            + " | — | — | — |",
             "",
             f"> **🎯 المرجع: {gemini.get('name', 'Gemini 2.5 Pro')} — عرض فقط ⛔**",
             "> الأرقام دي **بنشماركات عامة منشورة** لنفس النموذج (مش مقاسة على أسئلة امتحاننا)، "
