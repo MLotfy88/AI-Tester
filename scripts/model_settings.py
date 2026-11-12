@@ -2,8 +2,10 @@
 
 الفكرة: كل موديل عنده توصيات من مطوّره (قالب محادثة، نوع KV cache، flash-attn،
 عدد الطبقات على الـ GPU، sampling...). الأداة لازم:
-  1) تحترم إعدادات الامتحان الثابتة (temp=0.6 · top_p=0.95 · seed=1234 · ctx=8192
-     · max_tokens=4000 · الـ system prompt · المصحّح) — لأنها أساس المقارنة.
+  1) تحترم إعدادات الامتحان الثابتة (temp=0.6 · top_p=0.95 · seed=1234
+     · الـ system prompt · المصحّح) — لأنها أساس المقارنة.
+     (`ctx_size` و`max_tokens` مش منهم: بيتقبلوا من الـCLI لكل تشغيل
+     بـ`--ctx` و`--max-tokens`.)
   2) تطبّق توصيات المطوّر على كل إعدادات التشغيل اللي مش بتأثر على الدرجة.
   3) تعرض توصيات التوليد (temperature/top_p/...) في التقرير بدون تطبيقها،
      لأن تطبيقها بيكسر الحتمية.
@@ -23,7 +25,9 @@ from common import load_yaml, repo_path, sha256_text
 DEFAULT_OVERRIDES = "config/model_overrides.yaml"
 
 # إعدادات الامتحان الثابتة — أي overrides مشallowed يغيّرها
-FIXED_EXAM_SETTINGS = ("temperature", "top_p", "seed", "ctx_size", "max_tokens", "system_prompt")
+# (ملاحظة: `ctx_size` و`max_tokens` مش منهم — بيتقبلوا من الـCLI لكل تشغيل:
+#  `--ctx` و`--max-tokens`. مهم: لازم max_tokens <= ctx عشان الطلب ينجح)
+FIXED_EXAM_SETTINGS = ("temperature", "top_p", "seed", "system_prompt")
 
 
 @dataclass

@@ -938,8 +938,16 @@ def _meta_sheet(ws: Worksheet, results: list[dict], exam_cfg: dict, run_meta: di
         ("temperature", settings.get("temperature"), "ثابت"),
         ("top_p", settings.get("top_p"), "ثابت"),
         ("seed", settings.get("seed"), "ثابت"),
-        ("ctx_size", settings.get("ctx_size"), "ثابت — أي قيمة تانية تلغي المقارنة"),
-        ("max_tokens", settings.get("max_tokens"), "ثابت"),
+        (
+            "ctx_size",
+            run_meta.get("ctx") or settings.get("ctx_size"),
+            "قابل للتغيير لكل تشغيل (--ctx)",
+        ),
+        (
+            "max_tokens",
+            run_meta.get("max_tokens") or settings.get("max_tokens"),
+            "قابل للتغيير لكل تشغيل (--max-tokens)",
+        ),
         ("max_answer_chars", settings.get("max_answer_chars"), ""),
         (
             "تكرار الأسئلة",

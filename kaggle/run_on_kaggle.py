@@ -133,7 +133,13 @@ def main() -> int:
     ap.add_argument("--kernel-name", default="", help="اسم الـ kernel (افتراضي: exam-<تاريخ>)")
     ap.add_argument("--owner", default="", help="اسم مستخدم Kaggle (افتراضي: من التوكن)")
     ap.add_argument("--quant", default="Q4_K_M")
-    ap.add_argument("--ctx", type=int, default=8192, help="لازم 8192 — ورقة الامتحان ثابتة")
+    ap.add_argument("--ctx", type=int, default=16384, help="حجم السياق — أي رقم (16384 افتراضي)")
+    ap.add_argument(
+        "--max-tokens",
+        type=int,
+        default=12000,
+        help="ميزانية التوليد لكل سؤال (توكن) — لازم تكون أصغر من الـctx",
+    )
     ap.add_argument("--accelerator", default="t4x2", choices=sorted(build_kernel.ACCELERATORS))
     ap.add_argument("--vram-gib", type=float, default=3.4)
     ap.add_argument("--ram-gib", type=float, default=15.9)
@@ -163,6 +169,7 @@ def main() -> int:
         models=args.models,
         quant=args.quant,
         ctx=args.ctx,
+        max_tokens=args.max_tokens,
         accelerator=args.accelerator,
         vram_gib=args.vram_gib,
         ram_gib=args.ram_gib,

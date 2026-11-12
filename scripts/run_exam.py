@@ -29,7 +29,11 @@ from common import (  # noqa: E402
     slugify,
 )
 from exam.grader import grade_exam  # noqa: E402
-from exam.spec import all_questions  # noqa: E402
+from exam.spec import (  # noqa: E402
+    all_questions,
+    max_tokens_fits_ctx,
+    min_ctx_for_max_tokens,
+)
 from exam_runner import run_exam  # noqa: E402
 from excel_report import write_workbook  # noqa: E402
 from fit_check import analyze as analyze_fit  # noqa: E402
@@ -118,8 +122,9 @@ def _summary_md(results: list[dict], exam_cfg: dict, run_meta: dict) -> str:
         f"(ميزة إضافية · من 20 — مش بتأثر على الحكم) · "
         f"{len(cat_keys)} محاور (5 معايير × درجتين لكل سؤال)",
         f"- **الإعدادات:** temp={settings.get('temperature')} · top_p={settings.get('top_p')} · "
-        f"seed={settings.get('seed')} · ctx={settings.get('ctx_size')} · "
-        f"max_tokens={settings.get('max_tokens')} · تكرار={settings.get('repeats')} "
+        f"seed={settings.get('seed')} · ctx={run_meta.get('ctx') or settings.get('ctx_size')} · "
+        f"max_tokens={run_meta.get('max_tokens') or settings.get('max_tokens')} · "
+        f"تكرار={settings.get('repeats')} "
         f"({', '.join(settings.get('repeat_for') or [])})",
         f"- **بيئة التشغيل:** {runner_label(run_meta)} — "
         + ("أرقام السرعة **مقيسة فعلياً على GPU**." if measured_on_gpu(run_meta)
@@ -359,7 +364,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="تشغيل امتحان المساعد المصري على موديلات GGUF")
     ap.add_argument("--models", required=True, help="repo ids أو مسارات GGUF محلية، مفصولة بفاصلة")
     ap.add_argument("--quant", "--quant-pattern", dest="quant", default="Q4_K_M")
-    ap.add_argument("--ctx", type=int, default=0, help="0 = من إعدادات ورقة الامتحان (8192)")
+    ap.add_argument("--ctx", type=int, default=0, help="حجم السياق — 0 = من إعدادات ورقة الامتحان (16384)")
+    ap.add_argument(
+        "--max-tokens",
+        type=int,
+        default=0,
+        help="ميزانية التوليد لكل سؤال (توكن) — 0 = من إعدادات ورقة الامتحان (12000). "
+        "لازم يكون أصغر من الـctx عشان الطلب مايرجعش فاضي",
+    )
     ap.add_argument("--kv", default="", choices=["", "f16", "q8_0", "q4_0"], help="فاضي = من overrides/الافتراضي")
     ap.add_argument("--threads", type=int, default=0, help="0 = من overrides/الافتراضي")
     ap.add_argument("--ngl", type=int, default=None, help="مش محدد = القيمة المحسوبة من الملاءمة")
@@ -407,16 +419,52 @@ def main() -> int:
 
     exam_cfg = load_exam_from(args.exam)
     settings = exam_cfg.get("settings") or {}
-    fixed_ctx = int(settings.get("ctx_size", 8192))
+    fixed_ctx = int(settings.get("ctx_size", 16384))
     ctx = args.ctx if args.ctx else fixed_ctx
+    if ctx <= 0:
+        logger.error("ctx_size=%s غير صالح: لازم رقم موجب.", ctx)
+        return 2
     if ctx != fixed_ctx:
-        logger.error(
-            "ctx_size=%s مرفوض: ورقة الامتحان ثابتة على %s. "
-            "أي قيمة مختلفة تلغي قابلية المقارنة بين الموديلات.",
+        # ⚠ تغيير الـctx بيغيّر شكل الـprompt (طول السياق المتاح للموديل) ⇒
+        #   الأرقام بتختلف عن أي تشغيل بـ8192. مسموح، بس لازم يبان في التقرير.
+        logger.warning(
+            "⚠ ctx_size=%s مختلف عن القيمة الثابتة في ورقة الامتحان (%s). "
+            "النتايج مش قابلة للمقارنة المباشرة مع أي تشغيل بـ%s.",
             ctx,
             fixed_ctx,
+            fixed_ctx,
+        )
+
+    # ── ميزانية التوليد (max_tokens) ──────────────────────────────────────────
+    #   الافتراضي من ورقة الامتحان (12000). ممكن يتظبط بـ--max-tokens.
+    #   ⚠ لازم max_tokens + حجم الـprompt <= ctx، وإلا llama-server
+    #     بيرفض الطلب (HTTP 400) والرد بيطلع فاضي.
+    fixed_max_tokens = int(settings.get("max_tokens", 12000))
+    max_tokens = args.max_tokens if args.max_tokens else fixed_max_tokens
+    if max_tokens <= 0:
+        logger.error("max_tokens=%s غير صالح: لازم رقم موجب.", max_tokens)
+        return 2
+    if not max_tokens_fits_ctx(max_tokens, ctx):
+        logger.error(
+            "max_tokens=%s لا يدخل جوه ctx_size=%s "
+            "(محتاج ctx على الأقل %s). "
+            "زوّد الـctx أو قلّل الـmax_tokens — وإلا الطلب هيرجع فاضي.",
+            max_tokens,
+            ctx,
+            min_ctx_for_max_tokens(max_tokens),
         )
         return 2
+    if max_tokens != fixed_max_tokens:
+        logger.warning(
+            "⚠ max_tokens=%s مختلف عن القيمة الثابتة في ورقة الامتحان (%s). "
+            "النتايج مش قابلة للمقارنة المباشرة مع أي تشغيل بـ%s.",
+            max_tokens,
+            fixed_max_tokens,
+            fixed_max_tokens,
+        )
+    # ── طبّق القيمة المختارة على إعدادات التشغيل ───────────────────────────────
+    settings = dict(settings)
+    settings["max_tokens"] = max_tokens
 
     models = _split_models(args.models)
     if not models:
@@ -445,6 +493,7 @@ def main() -> int:
         "models_input": ", ".join(models),
         "quant_pattern": args.quant,
         "ctx": ctx,
+        "max_tokens": max_tokens,
         "kv": args.kv or "auto",
         "threads": args.threads or "auto",
         "ngl": args.ngl if args.ngl is not None else "auto",

@@ -35,3 +35,14 @@ desktop.ini
 
 # المعاينة المولّدة (تصميم) — مش جزء من المستودع
 design-preview/exam-report-v2.html
+
+# مخرجات تشغيل التجربة (سجلات + reports) — مش جزء من المستودع
+run1/
+run2/
+run3/
+exam-*/
+merged/
+*.zip
+
+# المعاينة المولّدة (تصميم) — مش جزء من المستودع
+design-preview/exam-report-v2.html

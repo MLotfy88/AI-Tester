@@ -238,9 +238,12 @@ exam_cmd = [
     str(PARAMS["models"]),
     "--quant",
     str(PARAMS.get("quant") or "Q4_K_M"),
-    # ctx ثابت 8192 (ورقة الامتحان) — أي قيمة تانية مرفوضة من run_exam.py
+    # حجم السياق — بتيجي من --ctx (أي رقم مسموح)؛ 16384 هو الافتراضي بس مش مثبّت
     "--ctx",
-    str(PARAMS.get("ctx") or 8192),
+    str(PARAMS.get("ctx") or 16384),
+    # ميزانية التوليد — بتيجي من --max-tokens (أي رقم مسموح)
+    "--max-tokens",
+    str(PARAMS.get("max_tokens") or 12000),
     "--kv",
     str(PARAMS.get("kv") or "f16"),
     "--threads",

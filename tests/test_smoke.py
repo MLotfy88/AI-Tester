@@ -27,7 +27,7 @@ from exam.rubric_engine import (  # noqa: E402
     verdict_for,
 )
 from exam.checks_profile import score_profile_question  # noqa: E402
-from exam.spec import all_questions, build_exam, repeats_for, total_planned_requests  # noqa: E402
+from exam.spec import all_questions, build_exam, max_tokens_fits_ctx, repeats_for, total_planned_requests  # noqa: E402
 from exam.spec import build_exam, repeats_for, total_planned_requests  # noqa: E402
 from references import (  # noqa: E402
     category_short,
@@ -193,11 +193,26 @@ class SpecTests(unittest.TestCase):
     def test_settings_are_fixed(self) -> None:
         exam = load_exam()
         settings = exam["settings"]
-        self.assertEqual(settings["ctx_size"], 8192)
-        self.assertEqual(settings["max_tokens"], 4000)
+        self.assertEqual(settings["ctx_size"], 16384)
+        self.assertEqual(settings["max_tokens"], 12000)
         self.assertEqual(settings["seed"], 1234)
         self.assertEqual(settings["repeats"], 1, "كل سؤال بتمريرة واحدة")
         self.assertEqual(list(settings["repeat_for"]), [])
+
+    def test_max_tokens_fits_in_ctx(self) -> None:
+        """لازم max_tokens يدخل جوه الـctx — وإلا الـserver بيرفض الطلب."""
+        exam = load_exam()
+        settings = exam["settings"]
+        self.assertTrue(
+            max_tokens_fits_ctx(settings["max_tokens"], settings["ctx_size"]),
+            "max_tokens لازم يكون أصغر من ctx_size (مع هامش للـprompt)",
+        )
+
+    def test_max_tokens_cli_flag_exists(self) -> None:
+        """في فلاج CLI لتغيير ميزانية التوليد لكل تشغيل."""
+        src = (ROOT / "scripts" / "run_exam.py").read_text(encoding="utf-8")
+        self.assertIn('"--max-tokens"', src)
+        self.assertIn("max_tokens_fits_ctx", src)
 
     def test_system_prompt_comes_from_spec(self) -> None:
         exam = load_exam()
@@ -808,10 +823,37 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("--policy", self.text, "سياسة التصحيح اتشالت في v3")
         self.assertNotIn("baseline", self.text.lower())
 
-    def test_workflow_ctx_is_8192(self) -> None:
+    def test_workflow_ctx_is_configurable(self) -> None:
+        """حجم السياق بقى اختيار حر في الـworkflow (مش مثبّت)."""
         self._skip_if_no_workflow()
-        self.assertIn("8192", self.text)
-        self.assertNotIn("4096", self.text, "ctx لازم 8192 في v3")
+        self.assertIn("ctx_size", self.text)
+        self.assertIn("default: \"16384\"", self.text, "16384 يفضل الافتراضي")
+        # القيمة بتتبعت زي ما هي للـ CLI — من غير تقييد
+        self.assertIn('--ctx "${{ inputs.ctx_size }}"', self.text)
+        self.assertNotIn(
+            "لازم 8192",
+            self.text,
+            "الوصف ما يقدرشsays إن الـctx لازم 8192",
+        )
+
+    def test_workflow_max_tokens_is_configurable(self) -> None:
+        """ميزانية التوليد (max_tokens) بقت اختيار حر في الـworkflow."""
+        self._skip_if_no_workflow()
+        self.assertIn("max_tokens", self.text)
+        self.assertIn("default: \"12000\"", self.text)
+        self.assertIn('--max-tokens "${{ inputs.max_tokens }}"', self.text)
+
+    def test_run_exam_allows_custom_ctx(self) -> None:
+        """run_exam.py مايرفضش أي ctx غير الافتراضي — بيسجّل تحذير بس."""
+        src = (ROOT / "scripts" / "run_exam.py").read_text(encoding="utf-8")
+        self.assertNotIn("مرفوض: ورقة الامتحان ثابتة", src)
+        self.assertIn("logger.warning", src)
+
+    def test_run_exam_rejects_max_tokens_beyond_ctx(self) -> None:
+        """لو max_tokens > ctx ⇒ لازم يرفض التشغيل (مش يطلع رد فاضي)."""
+        src = (ROOT / "scripts" / "run_exam.py").read_text(encoding="utf-8")
+        self.assertIn("max_tokens_fits_ctx", src)
+        self.assertIn("لا يدخل جوه ctx_size", src)
 
     def test_no_cpu_workflow_exists(self) -> None:
         self._skip_if_no_workflow()

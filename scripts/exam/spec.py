@@ -41,12 +41,20 @@ DEFAULT_VERDICTS = [
 ]
 
 #: إعدادات التشغيل الموصى بها (ورقة «إعدادات التشغيل»)
+#:
+#: `max_tokens` — ميزانية التوليد لكل سؤال. كانت 4000 وبتقطع إجابات
+#: الأسئلة اللي محتاجة تفكير طويل (finish_reason="length").
+#: الافتراضي دلوقتي 12000 عشانactus أهم.
+#:
+#: `ctx_size` — لازم يكون أكبر من `max_tokens` + حجم الـprompt (~512 توكن)،
+#: وإلا llama-server بيرفض الطلب (HTTP 400) والرد بيطلع فاضي.
+#: 16384 هو أصغر حجم \"آمن\" يغطي 12000.
 DEFAULT_SETTINGS = {
     "temperature": 0.6,
     "top_p": 0.95,
     "seed": 1234,
-    "max_tokens": 4000,
-    "ctx_size": 8192,
+    "max_tokens": 12000,
+    "ctx_size": 16384,
     "max_answer_chars": 6000,
     "repeats": 1,
     "repeat_for": [],
@@ -99,7 +107,7 @@ def build_exam(spec: dict | None = None, *, references: dict | None = None) -> d
 
     run_settings = dict(spec.get("run_settings") or {})
     settings = dict(DEFAULT_SETTINGS)
-    for key in ("temperature", "top_p", "seed", "max_tokens"):
+    for key in ("temperature", "top_p", "seed", "max_tokens", "ctx_size"):
         if run_settings.get(key) is not None:
             settings[key] = run_settings[key]
     if run_settings.get("repeat_for"):
@@ -255,10 +263,31 @@ def total_planned_requests(exam: dict, *, include_profile: bool = True) -> int:
     return scored + extra + profile
 
 
+#: أكبر عدد توكنات الـ prompt (system + question + tool defs) تقريباً.
+#:/questions themselves are tiny (≤400 chars) ⇒ ~250 tokens is a safe ceiling.
+PROMPT_TOKEN_RESERVE = 512
+
+
+def max_tokens_fits_ctx(max_tokens: int, ctx: int) -> bool:
+    """هل `max_tokens` هيدخل جوه `ctx` ولا الـserver هيرفض الطلب؟
+
+    llama.cpp بيحسب الـKV cache على `ctx` توكن بالظبط: الـprompt بياخد
+    جزء، والباقي空間 للتوليد. لو `max_tokens + prompt > ctx` ⇒
+    الطلب بيرجع 400 وترد فاضي.
+    """
+    return int(max_tokens) + PROMPT_TOKEN_RESERVE <= int(ctx)
+
+
+def min_ctx_for_max_tokens(max_tokens: int) -> int:
+    """أصغر `ctx` يناسب `max_tokens` (مع هامش للـprompt)."""
+    return int(max_tokens) + PROMPT_TOKEN_RESERVE
+
+
 __all__ = [
     "DEFAULT_SETTINGS",
     "DEFAULT_SPEC_PATH",
     "DEFAULT_VERDICTS",
+    "PROMPT_TOKEN_RESERVE",
     "REFERENCES_PATH",
     "RUBRIC_POINTS",
     "ROOT",
@@ -266,6 +295,8 @@ __all__ = [
     "build_exam",
     "category_of",
     "load_spec",
+    "max_tokens_fits_ctx",
+    "min_ctx_for_max_tokens",
     "question_map",
     "repeats_for",
     "total_planned_requests",

@@ -45,7 +45,7 @@
 | **إزاي أعرف الموديل هيمشي على جهازي؟** | حساب الـ fit من metadata الـ GGUF (§7) — **مش** تجربة ولا تخمين. |
 | **إزاي أعرف السرعة الحقيقية؟** | من **الأداء المقيس فعلياً** في التقرير (`Performance` / `SpeedDetail`) — مش من السقف النظري. |
 | **مرجع Gemini 2.5 Pro؟** | **عرض فقط ⛔** — بيدخلش في الدرجة ولا الحكم ولا بوابات الحد الأدنى. |
-| **إيه ctx؟** | **8192** ثابت. أي قيمة تانية مرفوضة. |
+| **إيه ctx؟** | **16384** افتراضي — أي رقم مقبول (`--ctx`). لازم `max_tokens` (12000 افتراضي) يدخل جوه الـctx. تغيير القيمة ⇒ تحذير إن النتايج مش قابلة للمقارنة المباشرة. |
 | **إزاي أعرف إن النتيجة مش مخدّعة؟** | `fit=Unknown` أو `ngl=0` مع device ⇒ **الأداة بتوقف بخطأ**. مش بتكمّل على المعالج. |
 
 ---
@@ -191,7 +191,7 @@ AI Online Tester/
 | `n_kv` | `{arch}.attention.head_count_kv` (قائمة أو رقم) |
 | `head_dim` | `{arch}.attention.key_length` (أو `embedding_length / n_head`) |
 | `file_bytes` | حجم الملف على القرص (أو مجموع الأجزاء) |
-| `ctx` | **8192** (ثابت) |
+| `ctx` | **16384** (افتراضي — قابل للتغيير بـ`--ctx`) |
 | `budget_gib` | **3.4** من `device_profile.yaml` |
 | `compute_gib` | **0.3** (buffer الحساب) |
 | `safety` | **0.95** |
@@ -230,18 +230,19 @@ else:                                   → "Mostly CPU"
 ### 7.4 مثال محسوب
 
 موديل **4B · Q4_K_M** (≈ 2.5 GiB) · 28 طبقة · 8 heads · 2 KV heads · head_dim 128 ·
-ctx 8192 · KV=f16:
+ctx 16384 · KV=f16:
 
 ```text
-KV_total = 2 × 8192 × 2 × 128 × 2 × 28 / 2^30 ≈ 0.22 GiB
-need_full = 2.5 + 0.22 + 0.3 = 3.02 GiB  ≤ 3.4  ⇒  ngl = 28 (Full GPU)
+KV_total = 2 × 16384 × 2 × 128 × 2 × 28 / 2^30 ≈ 0.44 GiB
+need_full = 2.5 + 0.44 + 0.3 = 3.24 GiB  ≤ 3.4  ⇒  ngl = 28 (Full GPU)
 ```
 
 نفس الموديل بـ **ctx 4096** كان هيبقى KV ≈ 0.11 ⇒ نفس النتيجة.
 موديل **8B · Q4_K_M** (≈ 5 GiB) ⇒ `need_full > 3.4` ⇒ `ngl` جزئي ⇒ **Partial**.
 
-> ⚠ **ليه ctx 8192 مهم للـ fit:** الـ KV بياخد نصيب من ميزانية VRAM.
-> لو زوّدته لـ 16K، الـ `ngl` ممكن ينزل ⇒ أداء أبطأ ⇒ مقارنة غير عادلة.
+> ⚠ **ليه الـctx مهم للـ fit:** الـ KV بياخد نصيب من ميزانية VRAM.
+> الـافتراضي **16384** (لازم يغطي `max_tokens=12000` + هامش الـprompt).
+> لو زوّدته لـ 32K، الـ `ngl` ممكن ينزل ⇒ أداء أبطأ ⇒ مقارنة غير عادلة.
 
 ### 7.5 حدود الحساب
 
@@ -449,7 +450,7 @@ Kaggle T4×2 فيه **16 GiB VRAM** (كارتين) و**~30 GiB RAM** ⇒ لو ش
 ```bash
 # يفحص ملف GGUF محلياً (JSON على الشاشة — لا يكتب ملفات)
 python scripts/fit_check.py --gguf models/model-Q4_K_M.gguf \
-  --profile config/device_profile.yaml --ctx 8192 --kv f16
+  --profile config/device_profile.yaml --ctx 16384 --kv f16
 ```
 
 ### الملحق B: أوامر CLI
@@ -462,7 +463,7 @@ python scripts/install_llamacpp.py --dir .llama --tag master --jobs 4 \
 # التشغيل الكامل
 python scripts/run_exam.py \
   --models "owner/model-GGUF,owner/other-GGUF" \
-  --quant Q4_K_M --ctx 8192 \
+  --quant Q4_K_M --ctx 16384 --max-tokens 12000 \
   --server .llama/bin/llama-server --threads 4 \
   --device CUDA0 --out out
 
@@ -480,7 +481,7 @@ python -m unittest discover -s tests -v
 |---|---|
 | **GGUF** | صيغة ملف موديل llama.cpp (-quantized). |
 | **ngl** | عدد الطبقات المرفوعة على الكارت (`-ngl`). `0` = معالج بس. |
-| **ctx** | حجم سياق الـ KV cache. ثابت **8192** هنا. |
+| **ctx** | حجم سياق الـ KV cache. افتراضي **16384** (قابل للتغيير بـ`--ctx`). |
 | **fit class** | `Full GPU` / `Partial` / `Mostly CPU` / `No fit` / `Unknown`. |
 | **tg / pp** | سرعة توليد / سرعة معالجة prompt (tok/s). |
 | **ballast** | حجز ذاكرة وهمية لمحاكاة سعة جهازك. |

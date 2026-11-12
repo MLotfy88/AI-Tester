@@ -70,9 +70,11 @@ README_TEXT = """# Final AI Test — النسخة المرجعية المستق�
 
 1. **ثبّت القالب:** انسخ `templates/qwen35_egyptian_nothink.jinja` وفعّل
    `chat_template_kwargs: {"enable_thinking": false}` (من غيره الردود بتفضل فاضية).
-2. **الإعدادات الثابتة:** `temperature=0.6` · `top_p=0.95` · `seed=1234` · `ctx_size=8192` ·
-   `max_tokens=4000` · نفس الـ system prompt (من `system_prompt_style`) · نفس القالب.
+2. **الإعدادات الثابتة:** `temperature=0.6` · `top_p=0.95` · `seed=1234` · `ctx_size=16384` ·
+   `max_tokens=12000` · نفس الـ system prompt (من `system_prompt_style`) · نفس القالب.
    أي تغيير بيكسر المقارنة.
+   ⚠ `ctx_size` لازم يكون أكبر من `max_tokens` (مع هامش ~512 توكن للـprompt)،
+   وإلا الـserver بيرفض الطلب والرد بيطلع فاضي.
 3. **الأسئلة:** 33 سؤال في `exam/exam_questions_v2.json` (المصدر الوحيد للحقيقة).
 4. **التصحيح:** بعد ما تاخد الإجابات، شغّل المصحّح على نفس الإجابات:
 

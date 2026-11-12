@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from common import human_bytes, load_exam, now_iso, sha256_file, slugify, tail_text, write_text
-from exam.spec import all_questions
+from exam.spec import PROMPT_TOKEN_RESERVE, all_questions
 
 # نفس الـ logger اللي بيستخدمه run_exam.py ("exam") ⇒ التحذيرات بتوصل لـ run.log والطرفية.
 log = logging.getLogger("exam")
@@ -545,7 +545,7 @@ def run_exam(
     settings: dict,
     out_dir: str | Path,
     slug: str | None = None,
-    ctx: int = 8192,
+    ctx: int = 16384,
     threads: int = 4,
     kv: str = "f16",
     ngl: int = 99,
@@ -583,7 +583,14 @@ def run_exam(
     temperature = float(settings.get("temperature", 0.6))
     top_p = float(settings.get("top_p", 0.95))
     seed = int(settings.get("seed", 1234))
-    max_tokens = int(settings.get("max_tokens", 4000))
+    max_tokens = int(settings.get("max_tokens", 12000))
+    # ⚠ guard: لو max_tokens + الـprompt > ctx ⇒ llama-server بيرفض الطلب
+    #   (HTTP 400) والرد بيطلع فاضي. نمنع ده قبل التشغيل.
+    if max_tokens + PROMPT_TOKEN_RESERVE > ctx:
+        raise ValueError(
+            f"max_tokens={max_tokens} لا يدخل جوه ctx={ctx} "
+            f"(محتاج ctx على الأقل {max_tokens + PROMPT_TOKEN_RESERVE})."
+        )
     # معاملات اختيارية (توصيات المطوّر) — بتفضل None في وضع الامتحان القياسي
     top_k = settings.get("top_k")
     min_p = settings.get("min_p")
@@ -946,7 +953,7 @@ def main() -> int:
     ap.add_argument("--exam", default="exam/exam_questions_v2.json")
     ap.add_argument("--out", default="out")
     ap.add_argument("--slug", default="")
-    ap.add_argument("--ctx", type=int, default=8192)
+    ap.add_argument("--ctx", type=int, default=16384)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--kv", default="f16")
     ap.add_argument("--ngl", type=int, default=99, help="عدد الطبقات المرفوعة للـ GPU (99 = كل حاجة)")

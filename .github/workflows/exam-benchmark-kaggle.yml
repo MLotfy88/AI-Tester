@@ -17,9 +17,14 @@ on:
         default: "Q4_K_M"
         type: string
       ctx_size:
-        description: "حجم السياق — لازم 8192 لأن ورقة الامتحان ثابتة"
+        description: "حجم السياق — أي رقم (16384 افتراضي). لازم يكون أكبر من max_tokens عشان الطلب ينجح. تغييره بيعني results غير قابلة للمقارنة المباشرة مع التشغيلات السابقة"
         required: true
-        default: "8192"
+        default: "16384"
+        type: string
+      max_tokens:
+        description: "ميزانية التوليد لكل سؤال (توكن) — لازم تكون أصغر من حجم السياق، وإلا الطلب هيرجع فاضي. الافتراضي 12000"
+        required: true
+        default: "12000"
         type: string
       accelerator:
         description: "الكارت على Kaggle — T4×2 (كارت واحد فعلياً)"
@@ -93,6 +98,7 @@ jobs:
             --models "${{ inputs.models }}" \
             --quant "${{ inputs.quant_pattern }}" \
             --ctx "${{ inputs.ctx_size }}" \
+            --max-tokens "${{ inputs.max_tokens }}" \
             --owner "${{ secrets.KAGGLE_USERNAME }}" \
             --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
@@ -110,6 +116,7 @@ jobs:
             --models "${{ inputs.models }}" \
             --quant "${{ inputs.quant_pattern }}" \
             --ctx "${{ inputs.ctx_size }}" \
+            --max-tokens "${{ inputs.max_tokens }}" \
             --owner "${{ secrets.KAGGLE_USERNAME }}" \
             --kernel-name "exam-${{ github.run_id }}" \
             --accelerator "${{ inputs.accelerator }}" \
