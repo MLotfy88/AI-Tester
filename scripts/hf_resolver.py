@@ -3,6 +3,7 @@
 - يقرأ شجرة الملفات من HF API (بدون تنزيل الريبو كله).
 - يختار ملف الـ quant المطابق، ويفهم الملفات المقسّمة (-00001-of-0000N).
 - يمنع التحميل لو الحجم أكبر من الحد أو مساحة القرص غير كافية.
+- **يعيد المحاولة** عند فشل الشبكة/CDN المؤقت (500/502/503/504).
 - لا يكتب أي JSON وسيط؛ يعيد manifest كـ dict في الذاكرة.
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +21,13 @@ from pathlib import Path
 from typing import Iterable
 
 from common import GIB, human_bytes, slugify
+
+#: أخطاء HTTP المؤقتة من CDN — بتتحل بإعادة المحاولة (مش_auth، مش خطأ في الإعداد).
+TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
+
+#: كام مرة نعيد المحاولة، وبكام ثانية بين المحاولات (تصاعد أُسّي).
+DOWNLOAD_RETRIES = 5
+DOWNLOAD_BACKOFF = 3.0
 
 
 class HFError(RuntimeError):
@@ -45,22 +54,72 @@ def _api_headers(token: str | None) -> dict:
     return headers
 
 
-def _get_json(url: str, token: str | None, timeout: int = 60):
-    req = urllib.request.Request(url, headers=_api_headers(token))
+def _auth_error(repo: str, code: int, body: str) -> HFError:
+    """رسالة خطأ واضحة لخطأ 401/403.
+
+    ⚠ HF بيرجّع **401** في حالتين مختلفتين تماماً:
+      1) الريبو **مقيّد (gated)** ⇒ محتاج HF_TOKEN.
+      2) الريبو **مش موجود** (غلط في الاسم/ناقص owner) ⇒ نفس الـ401!
+         مثل `Jais-3-3.7B-GGUF` بدل `IFM/Jais-3-3.7B-GGUF`.
+    عشان كده بنفحص وجود الريبو أولاً ونوجّه المستخدم للسبب الصح.
+    """
+    exists = _repo_exists(repo)
+    if not exists:
+        return HFError(
+            f"الريبو «{repo}» غير موجود على Hugging Face (401). "
+            f"غالباً الاسم ناقص owner — جرّب «owner/{repo}» "
+            f"(مثلاً IFM/Jais-3-3.7B-GGUF). {body}"
+        )
+    return HFError(
+        f"الريبو «{repo}» مقيّد (gated) — محتاج HF_TOKEN كـ secret. {body}"
+    )
+
+
+def _repo_exists(repo: str) -> bool:
+    """هل الريبو موجود على HF؟ (لتفسير خطأ 401/403)"""
+    url = f"https://huggingface.co/api/models/{urllib.parse.quote(repo, safe='/')}"
+    req = urllib.request.Request(url, headers=_api_headers(None))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        if exc.code in (401, 403):
-            raise HFError(
-                f"الريبو مقيّد أو غير متاح ({exc.code}). أضف HF_TOKEN كـ secret. {body}"
-            ) from exc
-        if exc.code == 404:
-            raise HFError(f"الريبو أو الـ revision غير موجود: {url}") from exc
-        raise HFError(f"HF API {exc.code}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise HFError(f"تعذّر الاتصال بـ Hugging Face: {exc}") from exc
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status == 200
+    except urllib.error.HTTPError:
+        return False
+    except Exception:
+        return False
+
+
+def _get_json(url: str, token: str | None, timeout: int = 60):
+    """JSON GET مع إعادة محاولة عند الأخطاء المؤقتة (5xx / انقطاع الشبكة)."""
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_RETRIES + 1):
+        req = urllib.request.Request(url, headers=_api_headers(token))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            last = exc
+            if exc.code in (401, 403):
+                raise HFError(
+                    f"خطأ مصادقة من Hugging Face ({exc.code}). "
+                    f"راجع اسم الريبو (owner/repo) أو أضف HF_TOKEN. {body}"
+                ) from exc
+            if exc.code == 404:
+                raise HFError(f"الريبو أو الـ revision غير موجود: {url}") from exc
+            if exc.code not in TRANSIENT_HTTP or attempt >= DOWNLOAD_RETRIES:
+                raise HFError(f"HF API {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            last = exc
+            if attempt >= DOWNLOAD_RETRIES:
+                raise HFError(f"تعذّر الاتصال بـ Hugging Face: {exc}") from exc
+        wait = DOWNLOAD_BACKOFF * (2 ** (attempt - 1))
+        print(
+            f"⚠ HF API فشل ({type(last).__name__}) — إعادة محاولة "
+            f"{attempt}/{DOWNLOAD_RETRIES - 1} بعد {wait:.0f} ثانية",
+            flush=True,
+        )
+        time.sleep(wait)
+    raise HFError(f"HF API فشل بعد {DOWNLOAD_RETRIES} محاولات: {last}") from last
 
 
 def generation_config(repo: str, revision: str = "main", token: str | None = None) -> dict:
@@ -97,20 +156,36 @@ def list_repo_files(repo: str, revision: str, token: str | None) -> list[dict]:
     out: list[dict] = []
     url = base
     for _ in range(20):
-        req = urllib.request.Request(url, headers=_api_headers(token))
-        try:
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                link = resp.headers.get("Link", "")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")[:400]
-            if exc.code in (401, 403):
-                raise HFError(
-                    f"الريبو مقيّد أو غير متاح ({exc.code}). أضف HF_TOKEN كـ secret. {body}"
-                ) from exc
-            raise HFError(f"HF tree API {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise HFError(f"تعذّر الاتصال بـ Hugging Face: {exc}") from exc
+        # كل صفحة بتتعاد مرة واحدة لو رجع خطأ مؤقت (5xx/انقطاع)
+        data = link = None
+        last: Exception | None = None
+        for attempt in range(1, DOWNLOAD_RETRIES + 1):
+            req = urllib.request.Request(url, headers=_api_headers(token))
+            try:
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    link = resp.headers.get("Link", "")
+                break
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")[:400]
+                last = exc
+                if exc.code in (401, 403):
+                    raise _auth_error(repo, exc.code, body) from exc
+                if exc.code not in TRANSIENT_HTTP or attempt >= DOWNLOAD_RETRIES:
+                    raise HFError(f"HF tree API {exc.code}: {body}") from exc
+            except urllib.error.URLError as exc:
+                last = exc
+                if attempt >= DOWNLOAD_RETRIES:
+                    raise HFError(f"تعذّر الاتصال بـ Hugging Face: {exc}") from exc
+            wait = DOWNLOAD_BACKOFF * (2 ** (attempt - 1))
+            print(
+                f"⚠ HF tree API فشل ({type(last).__name__}) — إعادة محاولة "
+                f"{attempt}/{DOWNLOAD_RETRIES - 1} بعد {wait:.0f} ثانية",
+                flush=True,
+            )
+            time.sleep(wait)
+        if data is None:
+            raise HFError(f"HF tree API فشل بعد {DOWNLOAD_RETRIES} محاولات: {last}") from last
 
         if not isinstance(data, list):
             raise HFError(f"استجابة HF غير متوقعة: {str(data)[:300]}")
@@ -255,6 +330,71 @@ def _disk_free(path: Path) -> int:
     return shutil.disk_usage(probe).free
 
 
+def _is_transient(exc: Exception) -> bool:
+    """هل الخطأ مؤقت (CDN/شبكة) ويستحق إعادة المحاولة؟
+
+    ⚠ **مش** بنعتبر 401/403/404 أخطاء مؤقتة — دي مشاكل مصادقة أو ملف
+    ناقص، وإعادتها مش هتنفع.
+    """
+    # huggingface_hub بيغلّف أخطاء HTTP في استثناءات مختلفة، وفيها
+    # الـ status code متاح كـ `.response.status_code` أو `.status_code`.
+    status = None
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        status = getattr(resp, "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(exc, "code", None)
+    if isinstance(status, int):
+        return status in TRANSIENT_HTTP
+    # استثناءات شبكة بدون كود (connection reset / timeout / CAS client error)
+    text = f"{type(exc).__name__}: {exc}".lower()
+    markers = (
+        "cas client error",
+        "file reconstruction error",
+        "connection reset",
+        "connection aborted",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "incompleteread",
+        "chunkedencodingerror",
+        "remote end closed",
+        "temporarilyunavailable",
+    )
+    return any(m in text for m in markers)
+
+
+def _download_with_retry(fn, **kwargs) -> str:
+    """ينزّل ملف من HF مع إعادة محاولة عند الأخطاء المؤقتة.
+
+    أخطاء 5xx من CDN (شائعة مع الملفات الكبيرة) بتتحل بإعادة المحاولة —
+    بدونها الموديل كله بيفشل بسبب رجعة واحدة.
+    """
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_RETRIES + 1):
+        try:
+            return fn(**kwargs)
+        except Exception as exc:
+            last = exc
+            if not _is_transient(exc):
+                raise
+            if attempt >= DOWNLOAD_RETRIES:
+                break
+            wait = DOWNLOAD_BACKOFF * (2 ** (attempt - 1))
+            print(
+                f"⚠ تنزيل {kwargs.get('filename')} فشل ({type(exc).__name__}) — "
+                f"إعادة محاولة {attempt}/{DOWNLOAD_RETRIES - 1} بعد {wait:.0f} ثانية",
+                flush=True,
+            )
+            time.sleep(wait)
+    raise HFError(
+        f"فشل تنزيل {kwargs.get('filename')} بعد {DOWNLOAD_RETRIES} محاولات: "
+        f"{type(last).__name__}: {last}"
+    ) from last
+
+
 def resolve_and_download(
     repo: str,
     pattern: str,
@@ -309,8 +449,9 @@ def resolve_and_download(
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     downloaded = []
     for f in chosen.files:
-        path = hf_hub_download(
-            repo_id=repo,
+        path = _download_with_retry(
+            hf_hub_download,
+            repo=repo,
             filename=f["path"],
             revision=revision or "main",
             token=token or None,

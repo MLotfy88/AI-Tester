@@ -56,6 +56,25 @@ except ImportError:  # pragma: no cover
     select_quant = None  # type: ignore[assignment]
 
 try:  # noqa: E402
+    import hf_resolver
+except ImportError:  # pragma: no cover
+    hf_resolver = None  # type: ignore[assignment]
+
+
+def _http_error(code: int) -> Exception:
+    """استثناء HTTP به status_code — زي اللي huggingface_hub بيرميه."""
+
+    class _Resp:
+        status_code = code
+
+    class _Err(Exception):
+        def __init__(self) -> None:
+            super().__init__(f"HTTP {code}")
+            self.response = _Resp()
+
+    return _Err()
+
+try:  # noqa: E402
     from html_report import write_report
 except ImportError:  # pragma: no cover
     write_report = None  # type: ignore[assignment]
@@ -772,6 +791,95 @@ class HFSelectionTests(unittest.TestCase):
         ]
         with self.assertRaises(Exception):
             select_quant(files, "Q4_K_M")
+
+
+# --------------------------------------------------------------------------- إعادة المحاولة
+class HFRetryTests(unittest.TestCase):
+    """أخطاء الـ CDN المؤقتة (500) كانت بتُسقط الموديل كله بلا إعادة محاولة."""
+
+    @unittest.skipIf(hf_resolver is None, "hf_resolver غير متاح")
+    def test_transient_detection(self) -> None:
+        self.assertTrue(hf_resolver._is_transient(_http_error(500)))
+        self.assertTrue(hf_resolver._is_transient(_http_error(503)))
+        self.assertTrue(hf_resolver._is_transient(_http_error(429)))
+        # أخطاء المصادقة/الملف الناقص مش مؤقتة
+        self.assertFalse(hf_resolver._is_transient(_http_error(401)))
+        self.assertFalse(hf_resolver._is_transient(_http_error(403)))
+        self.assertFalse(hf_resolver._is_transient(_http_error(404)))
+
+    @unittest.skipIf(hf_resolver is None, "hf_resolver غير متاح")
+    def test_cas_client_error_is_transient(self) -> None:
+        """خطأ CAS اللي رجع 500 على Kaggle لازم يتعتبر مؤقت."""
+        exc = RuntimeError(
+            "Task error: File reconstruction error: CAS Client Error: Request error: "
+            "HTTP status server error (500 Internal Server Error)"
+        )
+        self.assertTrue(hf_resolver._is_transient(exc))
+
+    @unittest.skipIf(hf_resolver is None, "hf_resolver غير متاح")
+    def test_download_retries_then_succeeds(self) -> None:
+        """فشل 500 مرتين وبعدين نجاح ⇒ لازم ينجح (المشكلة الأساسية)."""
+        old_backoff = hf_resolver.DOWNLOAD_BACKOFF
+        old_retries = hf_resolver.DOWNLOAD_RETRIES
+        hf_resolver.DOWNLOAD_BACKOFF = 0.0
+        hf_resolver.DOWNLOAD_RETRIES = 5
+        try:
+            calls = {"n": 0}
+
+            def flaky(**kwargs):
+                calls["n"] += 1
+                if calls["n"] <= 2:
+                    raise RuntimeError("CAS Client Error: HTTP status server error (500)")
+                return "ok.gguf"
+
+            path = hf_resolver._download_with_retry(flaky, repo_id="r", filename="f.gguf")
+            self.assertEqual(path, "ok.gguf")
+            self.assertEqual(calls["n"], 3, "لازم 3 محاولات (2 فشل + 1 نجاح)")
+        finally:
+            hf_resolver.DOWNLOAD_BACKOFF = old_backoff
+            hf_resolver.DOWNLOAD_RETRIES = old_retries
+
+    @unittest.skipIf(hf_resolver is None, "hf_resolver غير متاح")
+    def test_download_gives_up_with_clear_error(self) -> None:
+        """500 مستمر ⇒ HFError واضح بعد كل المحاولات."""
+        old_backoff = hf_resolver.DOWNLOAD_BACKOFF
+        old_retries = hf_resolver.DOWNLOAD_RETRIES
+        hf_resolver.DOWNLOAD_BACKOFF = 0.0
+        hf_resolver.DOWNLOAD_RETRIES = 3
+        try:
+            calls = {"n": 0}
+
+            def always_500(**kwargs):
+                calls["n"] += 1
+                raise RuntimeError("CAS Client Error: HTTP status server error (500)")
+
+            with self.assertRaises(hf_resolver.HFError):
+                hf_resolver._download_with_retry(always_500, repo_id="r", filename="f.gguf")
+            self.assertEqual(calls["n"], 3, "لازم يستنفد كل المحاولات")
+        finally:
+            hf_resolver.DOWNLOAD_BACKOFF = old_backoff
+            hf_resolver.DOWNLOAD_RETRIES = old_retries
+
+    @unittest.skipIf(hf_resolver is None, "hf_resolver غير متاح")
+    def test_auth_error_is_not_retried(self) -> None:
+        """401/403 ⇒ مايعيدش المحاولة (المصادقة مش هتتصلح بالتكرار)."""
+        old_backoff = hf_resolver.DOWNLOAD_BACKOFF
+        old_retries = hf_resolver.DOWNLOAD_RETRIES
+        hf_resolver.DOWNLOAD_BACKOFF = 0.0
+        hf_resolver.DOWNLOAD_RETRIES = 5
+        try:
+            calls = {"n": 0}
+
+            def auth_fail(**kwargs):
+                calls["n"] += 1
+                raise _http_error(401)
+
+            with self.assertRaises(Exception):
+                hf_resolver._download_with_retry(auth_fail, repo_id="r", filename="f.gguf")
+            self.assertEqual(calls["n"], 1, "401 مش مؤقت ⇒ محاولة واحدة بس")
+        finally:
+            hf_resolver.DOWNLOAD_BACKOFF = old_backoff
+            hf_resolver.DOWNLOAD_RETRIES = old_retries
 
 
 # --------------------------------------------------------------------------- الـ orchestrator
